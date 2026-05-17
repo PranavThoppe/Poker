@@ -8,16 +8,31 @@
 import UIKit
 import Messages
 import SwiftUI
+import Combine
 
 class MessagesViewController: MSMessagesAppViewController {
 
-    private let store = GameStore.mock
+    private let extensionHost: ExtensionHostModel
+
+    override init(nibName nibNameOrNil: String?, bundle nibBundleOrNil: Bundle?) {
+        extensionHost = ExtensionHostModel(gameStore: GameStore())
+        super.init(nibName: nibNameOrNil, bundle: nibBundleOrNil)
+    }
+
+    required init?(coder: NSCoder) {
+        extensionHost = ExtensionHostModel(gameStore: GameStore())
+        super.init(coder: coder)
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
 
-        let rootView = RootView().environmentObject(store)
-        let host = UIHostingController(rootView: rootView)
+        extensionHost.onSendToChat = { [weak self] in
+            self?.sendGameMessage(to: self?.activeConversation)
+        }
+
+        let shell = ExtensionShellView(model: extensionHost)
+        let host = UIHostingController(rootView: shell)
         addChild(host)
         host.view.frame = view.bounds
         host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -29,10 +44,22 @@ class MessagesViewController: MSMessagesAppViewController {
     // MARK: - Conversation Handling
     
     override func willBecomeActive(with conversation: MSConversation) {
-        // Called when the extension is about to move from the inactive to active state.
-        // This will happen when the extension is about to present UI.
-        
-        // Use this method to configure the extension and restore previously stored state.
+        super.willBecomeActive(with: conversation)
+        // Fresh open (no tapped bubble): pick a game and send the invite.
+        // Tapped bubble: same extension URL as `sendGameMessage` (`poker://game?...`) → waiting room / game UI.
+        if let url = conversation.selectedMessage?.url,
+           Self.isPokerGameInviteURL(url) {
+            extensionHost.route = .game
+        } else {
+            extensionHost.route = .gameSelection
+        }
+        applyPresentationStyleForCurrentRoute()
+    }
+
+    /// Matches URLs produced by `sendGameMessage` (`poker://game?id=…&phase=…`).
+    private static func isPokerGameInviteURL(_ url: URL) -> Bool {
+        guard url.scheme?.caseInsensitiveCompare("poker") == .orderedSame else { return false }
+        return url.host?.caseInsensitiveCompare("game") == .orderedSame
     }
     
     override func didResignActive(with conversation: MSConversation) {
@@ -63,15 +90,75 @@ class MessagesViewController: MSMessagesAppViewController {
     }
     
     override func willTransition(to presentationStyle: MSMessagesAppPresentationStyle) {
-        // Called before the extension transitions to a new presentation style.
-    
-        // Use this method to prepare for the change in presentation style.
+        super.willTransition(to: presentationStyle)
+        guard presentationStyle == .compact, extensionHost.prefersExpandedPresentation else { return }
+        requestPresentationStyle(.expanded)
     }
     
     override func didTransition(to presentationStyle: MSMessagesAppPresentationStyle) {
-        // Called after the extension transitions to a new presentation style.
-    
-        // Use this method to finalize any behaviors associated with the change in presentation style.
+        super.didTransition(to: presentationStyle)
     }
 
+    private func applyPresentationStyleForCurrentRoute() {
+        guard extensionHost.prefersExpandedPresentation else { return }
+        requestPresentationStyle(.expanded)
+    }
+
+    // MARK: - Game invite
+
+    /// Sends a Classic Poker bubble. When `BubbleCard` is missing from the asset catalog, the layout still shows caption/subcaption.
+    private func sendGameMessage(to conversation: MSConversation?) {
+        guard let conversation else { return }
+        let message = MSMessage()
+        let layout = MSMessageTemplateLayout()
+        layout.caption = "Classic Poker"
+        layout.subcaption = "Tap to join"
+        layout.image = UIImage(named: "BubbleCard")
+        message.layout = layout
+        let id = UUID().uuidString
+        message.url = URL(string: "poker://game?id=\(id)&phase=waiting")
+        conversation.insert(message) { [weak self] error in
+            guard error == nil else { return }
+            self?.dismiss()
+        }
+    }
+
+}
+
+// MARK: - SwiftUI routing
+
+@MainActor
+private final class ExtensionHostModel: ObservableObject {
+    enum Route {
+        case gameSelection
+        case game
+    }
+
+    @Published var route: Route = .gameSelection
+    let gameStore: GameStore
+
+    var onSendToChat: (() -> Void)?
+
+    init(gameStore: GameStore) {
+        self.gameStore = gameStore
+    }
+
+    var prefersExpandedPresentation: Bool {
+        route == .gameSelection
+    }
+}
+
+private struct ExtensionShellView: View {
+    @ObservedObject var model: ExtensionHostModel
+
+    var body: some View {
+        Group {
+            switch model.route {
+            case .gameSelection:
+                GameSelectionView(onSend: { model.onSendToChat?() ?? () })
+            case .game:
+                RootView().environmentObject(model.gameStore)
+            }
+        }
+    }
 }

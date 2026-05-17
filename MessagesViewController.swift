@@ -7,12 +7,23 @@
 
 import UIKit
 import Messages
+import SwiftUI
 
 class MessagesViewController: MSMessagesAppViewController {
-    
+
+    private let store = GameStore.mock
+
     override func viewDidLoad() {
         super.viewDidLoad()
-        // Do any additional setup after loading the view.
+
+        let rootView = RootView().environmentObject(store)
+        let host = UIHostingController(rootView: rootView)
+        addChild(host)
+        host.view.frame = view.bounds
+        host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        host.view.backgroundColor = .black
+        view.addSubview(host.view)
+        host.didMove(toParent: self)
     }
     
     // MARK: - Conversation Handling

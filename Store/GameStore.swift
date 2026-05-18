@@ -9,6 +9,36 @@ final class GameStore: ObservableObject {
         self.state = state
     }
 
+    /// New waiting-room session; `gameID` is embedded in the iMessage bubble URL.
+    static func createNew() -> GameState {
+        var state = GameState()
+        state.gameID = UUID()
+        state.phase = .waiting
+        return state
+    }
+
+    /// Reconstructs session identity from a tapped bubble URL.
+    static func decode(from url: URL) -> GameState? {
+        guard let (gameID, phase) = GameMessageURL.decode(from: url) else { return nil }
+        var state = GameState()
+        state.gameID = gameID
+        state.phase = phase
+        return state
+    }
+
+    func joinGame(playerID: String, name: String) {
+        if let existing = state.players.firstIndex(where: { $0.id == playerID }) {
+            if state.heroID == nil {
+                state.heroID = state.players[existing].id
+            }
+            return
+        }
+        state.players.append(Player(id: playerID, name: name, stack: 500))
+        if state.heroID == nil {
+            state.heroID = playerID
+        }
+    }
+
     // MARK: - Waiting room intents
 
     func toggleReady() {

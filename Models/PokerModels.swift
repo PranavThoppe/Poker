@@ -90,6 +90,8 @@ struct PlayerStats: Identifiable, Codable {
 // MARK: - Game state
 
 struct GameState: Codable {
+    /// Stable session identifier for this game; encoded in the iMessage bubble URL.
+    var gameID: UUID = UUID()
     var phase: GamePhase = .waiting
     var players: [Player] = []
     var board: [Card?] = Array(repeating: nil, count: 5)

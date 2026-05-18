@@ -246,7 +246,7 @@ class MessagesViewController: MSMessagesAppViewController {
 
     // MARK: - Game invite
 
-    /// Sends a Classic Poker bubble. When `BubbleCard` is missing from the asset catalog, the layout still shows caption/subcaption.
+    /// Sends a Classic Poker bubble: template layout shows only the card image (no caption strip).
     private func sendGameMessage(to conversation: MSConversation?) {
         guard let conversation else { return }
 
@@ -259,8 +259,12 @@ class MessagesViewController: MSMessagesAppViewController {
 
         let message = MSMessage()
         let layout = MSMessageTemplateLayout()
-        layout.caption = "Classic Poker"
-        layout.subcaption = "Tap to join"
+        layout.caption = nil
+        layout.subcaption = nil
+        layout.trailingCaption = nil
+        layout.trailingSubcaption = nil
+        layout.imageTitle = nil
+        layout.imageSubtitle = nil
         layout.image = UIImage(named: "BubbleCard")
         message.layout = layout
         message.url = GameMessageURL.encode(gameID: store.state.gameID, phase: store.state.phase)

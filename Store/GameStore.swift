@@ -89,7 +89,6 @@ final class GameStore: ObservableObject {
     }
 
     func resetToWaiting() {
-        let names = state.players.map { $0.name }
         var fresh = GameState()
         fresh.phase = .waiting
         fresh.players = state.players.enumerated().map { (i, p) in

@@ -78,7 +78,7 @@ struct WaitingRoomView: View {
 
     private var readyButton: some View {
         Button(action: { store.toggleReady() }) {
-            Text(isHeroReady ? "Not Ready" : "Ready Up")
+            Text(isHeroReady ? "Cancel" : "Ready Up")
                 .font(Theme.Font.actionLabel)
                 .foregroundStyle(isHeroReady ? Theme.Color.secondary : Theme.Color.background)
                 .frame(maxWidth: .infinity)

@@ -1,15 +1,12 @@
 import SwiftUI
 
 struct GameSelectionView: View {
-    var onSend: () -> Void
+    var onClassicSend: () -> Void
+    var onPracticePlay: () -> Void
 
     @State private var selectedMode: GameMode?
 
-    private enum GameMode: Equatable {
-        case classicPoker
-    }
-
-    private let upcomingModeCount = 4
+    private let upcomingModeCount = 3
 
     var body: some View {
         ZStack {
@@ -24,7 +21,7 @@ struct GameSelectionView: View {
 
                 Spacer()
 
-                sendButton
+                primaryButton
 
                 Spacer().frame(height: Theme.Spacing.lg)
             }
@@ -58,6 +55,8 @@ struct GameSelectionView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, Theme.Spacing.xs)
 
+            practiceVsCPUCard
+
             ForEach(0..<upcomingModeCount, id: \.self) { _ in
                 upcomingModeCard
             }
@@ -78,6 +77,23 @@ struct GameSelectionView: View {
             isEnabled: true
         ) {
             selectedMode = selectedMode == .classicPoker ? nil : .classicPoker
+        }
+    }
+
+    private var practiceVsCPUCard: some View {
+        gameModeCard(
+            icon: {
+                Image(systemName: "cpu")
+                    .font(.system(size: 24, weight: .semibold))
+                    .foregroundStyle(Theme.Color.primary)
+            },
+            iconBackground: Theme.Color.surfaceDeep,
+            title: "Practice vs CPU",
+            subtitle: "Play locally against bots",
+            isSelected: selectedMode == .practiceVsCPU,
+            isEnabled: true
+        ) {
+            selectedMode = selectedMode == .practiceVsCPU ? nil : .practiceVsCPU
         }
     }
 
@@ -151,27 +167,46 @@ struct GameSelectionView: View {
         .allowsHitTesting(isEnabled)
     }
 
-    // MARK: - Send
+    // MARK: - Primary CTA
 
-    private var sendButton: some View {
-        Button(action: onSend) {
-            Text("Send to Chat")
+    private var primaryButton: some View {
+        Button(action: performPrimaryAction) {
+            Text(primaryButtonTitle)
                 .font(Theme.Font.actionLabel)
-                .foregroundStyle(canSend ? Theme.Color.background : Theme.Color.secondary)
+                .foregroundStyle(canPerformPrimaryAction ? Theme.Color.background : Theme.Color.secondary)
                 .frame(maxWidth: .infinity)
                 .frame(height: Theme.Size.actionPillH)
-                .background(canSend ? Theme.Color.primary : Theme.Color.surfaceDeep)
+                .background(canPerformPrimaryAction ? Theme.Color.primary : Theme.Color.surfaceDeep)
                 .clipShape(Capsule())
         }
-        .disabled(!canSend)
-        .animation(.easeInOut(duration: 0.2), value: canSend)
+        .disabled(!canPerformPrimaryAction)
+        .animation(.easeInOut(duration: 0.2), value: canPerformPrimaryAction)
     }
 
-    private var canSend: Bool {
+    private var primaryButtonTitle: String {
+        switch selectedMode {
+        case .classicPoker: return "Send to Chat"
+        case .practiceVsCPU: return "Play"
+        case nil: return "Send to Chat"
+        }
+    }
+
+    private var canPerformPrimaryAction: Bool {
         selectedMode != nil
+    }
+
+    private func performPrimaryAction() {
+        switch selectedMode {
+        case .classicPoker:
+            onClassicSend()
+        case .practiceVsCPU:
+            onPracticePlay()
+        case nil:
+            break
+        }
     }
 }
 
 #Preview("Game Selection") {
-    GameSelectionView(onSend: {})
+    GameSelectionView(onClassicSend: {}, onPracticePlay: {})
 }

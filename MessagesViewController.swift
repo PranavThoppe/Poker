@@ -67,6 +67,10 @@ class MessagesViewController: MSMessagesAppViewController {
             self?.sendGameMessage(to: self?.activeConversation)
         }
 
+        extensionHost.onPracticePlay = { [weak self] in
+            self?.startPracticeSession()
+        }
+
         let shell = ExtensionShellView(model: extensionHost)
         let host = UIHostingController(rootView: shell)
         addChild(host)
@@ -198,7 +202,7 @@ class MessagesViewController: MSMessagesAppViewController {
         requestPresentationStyle(.expanded)
     }
 
-    private static func localPlayerName(for conversation: MSConversation) -> String {
+    private static func localPlayerName(for conversation: MSConversation?) -> String {
         // Onboarding / display names deferred; use a stable placeholder per device.
         "Player"
     }
@@ -251,7 +255,7 @@ class MessagesViewController: MSMessagesAppViewController {
         guard let conversation else { return }
 
         let store = extensionHost.gameStore
-        store.state = GameStore.createNew()
+        store.state = GameStore.createNew(mode: .classicPoker)
         store.joinGame(
             playerID: conversation.localParticipantIdentifier.uuidString,
             name: Self.localPlayerName(for: conversation)
@@ -282,6 +286,24 @@ class MessagesViewController: MSMessagesAppViewController {
         }
     }
 
+    /// Local practice session — no iMessage bubble.
+    private func startPracticeSession() {
+        let store = extensionHost.gameStore
+        store.state = GameStore.createNew(mode: .practiceVsCPU)
+        store.joinGame(
+            playerID: Self.practiceLocalPlayerID,
+            name: Self.localPlayerName(for: activeConversation)
+        )
+        extensionHost.route = .game
+        RouteDebug.event(
+            "startPracticeSession",
+            "gameID=\(store.state.gameID) gameMode=\(store.state.gameMode.rawValue) route=game"
+        )
+        requestPresentationStyle(.expanded)
+    }
+
+    private static let practiceLocalPlayerID = "practice-local"
+
 }
 
 // MARK: - SwiftUI routing
@@ -297,6 +319,7 @@ private final class ExtensionHostModel: ObservableObject {
     let gameStore: GameStore
 
     var onSendToChat: (() -> Void)?
+    var onPracticePlay: (() -> Void)?
 
     init(gameStore: GameStore) {
         self.gameStore = gameStore
@@ -316,7 +339,10 @@ private struct ExtensionShellView: View {
         Group {
             switch model.route {
             case .gameSelection:
-                GameSelectionView(onSend: { model.onSendToChat?() ?? () })
+                GameSelectionView(
+                    onClassicSend: { model.onSendToChat?() ?? () },
+                    onPracticePlay: { model.onPracticePlay?() ?? () }
+                )
             case .game:
                 RootView().environmentObject(model.gameStore)
             }

@@ -38,6 +38,14 @@ struct Player: Identifiable, Codable, Equatable {
     var isEliminated: Bool = false
     var currentBet: Int = 0
     var avatarIndex: Int = 0
+    var isBot: Bool = false
+}
+
+// MARK: - Game mode
+
+enum GameMode: String, Codable, Equatable {
+    case classicPoker    // iMessage; solo allowed
+    case practiceVsCPU   // local; bots added in Phase 2
 }
 
 // MARK: - Game phases & actions
@@ -109,6 +117,7 @@ struct PlayerStats: Identifiable, Codable {
 struct GameState: Codable {
     /// Stable session identifier for this game; encoded in the iMessage bubble URL.
     var gameID: UUID = UUID()
+    var gameMode: GameMode = .classicPoker
     var phase: GamePhase = .waiting
     var players: [Player] = []
     var board: [Card?] = Array(repeating: nil, count: 5)

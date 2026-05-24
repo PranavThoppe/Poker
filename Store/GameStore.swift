@@ -6,15 +6,19 @@ final class GameStore: ObservableObject {
     @Published var state: GameState
 
     private var engine = PokerEngine()
+    private let botScheduler = BotTurnScheduler()
+    private var botSessionConfig = BotSessionConfig.default
+    private var botStrategy: BotStrategy = makeStrategy(for: .default)
 
     init(state: GameState = GameState()) {
         self.state = state
     }
 
     /// New waiting-room session; `gameID` is embedded in the iMessage bubble URL.
-    static func createNew() -> GameState {
+    static func createNew(mode: GameMode = .classicPoker) -> GameState {
         var state = GameState()
         state.gameID = UUID()
+        state.gameMode = mode
         state.phase = .waiting
         return state
     }
@@ -51,9 +55,13 @@ final class GameStore: ObservableObject {
 
     func startGame() {
         guard !state.players.isEmpty else { return }
+        if state.gameMode == .practiceVsCPU {
+            seedBots()
+        }
         engine.startGame(&state)
         engine.startHand(&state)
         state.phase = .playing
+        scheduleBotTurnIfNeeded()
     }
 
     var allReady: Bool {
@@ -91,19 +99,23 @@ final class GameStore: ObservableObject {
     }
 
     func resetToWaiting() {
+        botScheduler.cancel()
         var fresh = GameState()
         fresh.phase = .waiting
         fresh.gameID = state.gameID
-        fresh.players = state.players.map { p in
-            var np = p
-            np.isReady = false
-            np.isFolded = false
-            np.isEliminated = false
-            np.isDealer = false
-            np.currentBet = 0
-            np.stack = PokerEngine.startingStack
-            return np
-        }
+        fresh.gameMode = state.gameMode
+        fresh.players = state.players
+            .filter { !$0.isBot }
+            .map { p in
+                var np = p
+                np.isReady = false
+                np.isFolded = false
+                np.isEliminated = false
+                np.isDealer = false
+                np.currentBet = 0
+                np.stack = PokerEngine.startingStack
+                return np
+            }
         fresh.heroID = state.heroID
         state = fresh
     }
@@ -111,17 +123,61 @@ final class GameStore: ObservableObject {
     // MARK: - Private
 
     private func apply(_ action: BettingAction) {
-        guard state.phase == .playing else { return }
         guard let heroID = state.heroID else { return }
-        guard engine.applyAction(&state, playerID: heroID, action: action) else { return }
+        applyAction(for: heroID, action: action)
+    }
 
-        guard state.activePlayerID == nil else { return }
+    private func applyAction(for playerID: String, action: BettingAction) {
+        guard state.phase == .playing else { return }
+        guard engine.applyAction(&state, playerID: playerID, action: action) else { return }
 
+        if state.activePlayerID == nil {
+            finalizeHandIfNeeded()
+        } else {
+            scheduleBotTurnIfNeeded()
+        }
+    }
+
+    private func finalizeHandIfNeeded() {
         if engine.shouldEndGame(state) {
             endGame()
         } else if engine.shouldStartNextHand(state) {
             engine.startHand(&state)
+            scheduleBotTurnIfNeeded()
         }
+    }
+
+    private func scheduleBotTurnIfNeeded() {
+        guard state.gameMode == .practiceVsCPU,
+              let id = state.activePlayerID,
+              isBot(id) else { return }
+        botScheduler.schedule { [weak self] in
+            self?.performBotTurn(playerID: id)
+        }
+    }
+
+    private func performBotTurn(playerID: String) {
+        guard state.phase == .playing,
+              state.activePlayerID == playerID,
+              isBot(playerID) else { return }
+        let legal = engine.legalActions(for: state, playerID: playerID)
+        guard !legal.isEmpty else { return }
+        let action = botStrategy.chooseAction(
+            state: state,
+            playerID: playerID,
+            legalActions: legal
+        )
+        applyAction(for: playerID, action: action)
+    }
+
+    private func seedBots() {
+        state.players.removeAll { $0.isBot }
+        state.players.append(contentsOf: BotCatalog.makeBots(count: botSessionConfig.botCount))
+        botStrategy = makeStrategy(for: botSessionConfig)
+    }
+
+    private func isBot(_ playerID: String) -> Bool {
+        state.players.first(where: { $0.id == playerID })?.isBot == true
     }
 
     private func buildStats() -> [PlayerStats] {

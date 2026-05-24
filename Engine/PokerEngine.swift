@@ -122,6 +122,33 @@ struct PokerEngine {
         return true
     }
 
+    func legalActions(for state: GameState, playerID: String) -> [BettingAction] {
+        guard state.activePlayerID == playerID,
+              let idx = state.players.firstIndex(where: { $0.id == playerID }),
+              !state.players[idx].isFolded,
+              !state.players[idx].isEliminated else { return [] }
+
+        var actions: [BettingAction] = [.fold]
+        let player = state.players[idx]
+        let toCall = state.streetBetLevel - player.currentBet
+
+        if player.currentBet == state.streetBetLevel {
+            actions.append(.check)
+        }
+
+        if toCall > 0, player.stack >= toCall {
+            actions.append(.call(amount: toCall))
+        }
+
+        let minRaiseTo = state.streetBetLevel + max(state.lastRaiseSize, Self.bigBlind)
+        let needed = minRaiseTo - player.currentBet
+        if minRaiseTo > state.streetBetLevel, needed > 0, needed <= player.stack {
+            actions.append(.raise(amount: minRaiseTo))
+        }
+
+        return actions
+    }
+
     func shouldEndGame(_ state: GameState) -> Bool {
         state.players.filter { !$0.isEliminated && $0.stack > 0 }.count <= 1
     }

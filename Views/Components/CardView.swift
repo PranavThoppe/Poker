@@ -8,20 +8,20 @@ struct CardView: View {
     var height: CGFloat = Theme.Size.cardH
 
     var body: some View {
-        ZStack(alignment: .topLeading) {
+        ZStack {
             RoundedRectangle(cornerRadius: Theme.Radius.card)
                 .fill(Theme.Color.cardFace)
                 .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
 
-            VStack(alignment: .leading, spacing: 1) {
-                Text(card.rank.rawValue)
-                    .font(Theme.Font.cardRank(width * 0.32))
-                    .foregroundStyle(card.suit.color)
-                Text(card.suit.rawValue)
-                    .font(Theme.Font.cardSuit(width * 0.26))
-                    .foregroundStyle(card.suit.color)
-            }
-            .padding(6)
+            Text(card.suit.rawValue)
+                .font(Theme.Font.cardSuit(width * 0.48))
+                .foregroundStyle(card.suit.color)
+
+            Text(card.rank.rawValue)
+                .font(Theme.Font.cardRank(width * 0.32))
+                .foregroundStyle(card.suit.color)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .padding(6)
         }
         .frame(width: width, height: height)
     }

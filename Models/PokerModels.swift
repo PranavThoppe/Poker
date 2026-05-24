@@ -50,6 +50,15 @@ enum GamePhase: Codable, Equatable {
 
 enum BettingRound: Codable, Equatable {
     case preFlop, flop, turn, river
+
+    var displayName: String {
+        switch self {
+        case .preFlop: return "Pre-flop"
+        case .flop: return "Flop"
+        case .turn: return "Turn"
+        case .river: return "River"
+        }
+    }
 }
 
 enum BettingAction: Codable {
@@ -72,6 +81,14 @@ enum HandRank: String, Codable {
     case fourOfAKind = "Four of a Kind"
     case straightFlush = "Straight Flush"
     case royalFlush = "Royal Flush"
+}
+
+// MARK: - Per-player hand tracking (session)
+
+struct PlayerHandStats: Codable, Equatable {
+    var handsWon: Int = 0
+    var handsPlayed: Int = 0
+    var biggestPot: Int = 0
 }
 
 // MARK: - Stats
@@ -104,4 +121,12 @@ struct GameState: Codable {
     var callAmount: Int = 0
     var raiseAmount: Int = 0
     var endStats: [PlayerStats] = []
+
+    // Engine-owned fields (local session; not in message URL)
+    var holeCardsByPlayer: [String: [Card]] = [:]
+    var remainingDeck: [Card] = []
+    var handStats: [String: PlayerHandStats] = [:]
+    var streetBetLevel: Int = 0
+    var lastRaiseSize: Int = 10
+    var actedThisStreet: [String] = []
 }

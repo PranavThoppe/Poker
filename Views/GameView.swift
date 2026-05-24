@@ -18,7 +18,8 @@ struct GameView: View {
 
                 BoardView(
                     board: store.state.board,
-                    pot: store.state.pot
+                    pot: store.state.pot,
+                    streetLabel: store.state.bettingRound.displayName
                 )
 
                 Spacer()
@@ -26,9 +27,12 @@ struct GameView: View {
                 ActionBarView(
                     callAmount: store.state.callAmount,
                     raiseAmount: store.state.raiseAmount,
+                    isHeroTurn: store.isHeroTurn,
+                    onCheck: { store.check() },
                     onCall: { store.call() },
                     onRaise: { store.raise(store.state.raiseAmount) },
-                    onFold: { store.fold() }
+                    onFold: { store.fold() },
+                    onFinishGame: { store.endGame() }
                 )
                 .padding(.horizontal, Theme.Spacing.md)
 
@@ -96,9 +100,17 @@ private struct PlayerTileView: View {
 struct BoardView: View {
     let board: [Card?]
     let pot: Int
+    var streetLabel: String? = nil
 
     var body: some View {
         VStack(alignment: .trailing, spacing: Theme.Spacing.xs) {
+            if let streetLabel {
+                Text(streetLabel)
+                    .font(Theme.Font.caption)
+                    .foregroundStyle(Theme.Color.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
             HStack(spacing: Theme.Spacing.sm) {
                 ForEach(0..<5, id: \.self) { i in
                     if let card = board[safe: i] ?? nil {
@@ -123,16 +135,25 @@ struct BoardView: View {
 struct ActionBarView: View {
     let callAmount: Int
     let raiseAmount: Int
+    let isHeroTurn: Bool
+    let onCheck: () -> Void
     let onCall: () -> Void
     let onRaise: () -> Void
     let onFold: () -> Void
+    let onFinishGame: () -> Void
 
     @State private var showOptions = false
 
+    private var actionsEnabled: Bool { isHeroTurn }
+
     var body: some View {
         HStack(spacing: Theme.Spacing.sm) {
-            ActionPill(label: "Call \(callAmount)", action: onCall)
-            ActionPill(label: "Raise \(raiseAmount)", action: onRaise)
+            if callAmount == 0 {
+                ActionPill(label: "Check", action: onCheck, isEnabled: actionsEnabled)
+            } else {
+                ActionPill(label: "Call \(callAmount)", action: onCall, isEnabled: actionsEnabled)
+            }
+            ActionPill(label: "Raise \(raiseAmount)", action: onRaise, isEnabled: actionsEnabled)
             moreButton
         }
         .frame(height: Theme.Size.actionPillH)
@@ -147,8 +168,11 @@ struct ActionBarView: View {
                 .background(Theme.Color.surface)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.pill))
         }
+        .disabled(!actionsEnabled)
+        .opacity(actionsEnabled ? 1 : 0.4)
         .confirmationDialog("More Options", isPresented: $showOptions, titleVisibility: .hidden) {
             Button("Fold", role: .destructive) { onFold() }
+            Button("Finish game (test)") { onFinishGame() }
             Button("Cancel", role: .cancel) {}
         }
     }
@@ -157,17 +181,20 @@ struct ActionBarView: View {
 private struct ActionPill: View {
     let label: String
     let action: () -> Void
+    var isEnabled: Bool = true
 
     var body: some View {
         Button(action: action) {
             Text(label)
                 .font(Theme.Font.actionLabel)
-                .foregroundStyle(Theme.Color.primary)
+                .foregroundStyle(isEnabled ? Theme.Color.primary : Theme.Color.secondary)
                 .frame(maxWidth: .infinity)
                 .frame(height: Theme.Size.actionPillH)
                 .background(Theme.Color.surface)
                 .clipShape(Capsule())
         }
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.4)
     }
 }
 
@@ -258,4 +285,9 @@ private extension Array {
 #Preview("Game Screen") {
     GameView()
         .environmentObject(GameStore.mock)
+}
+
+#Preview("Solo Game") {
+    GameView()
+        .environmentObject(GameStore.mockSoloPlaying)
 }

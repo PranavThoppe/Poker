@@ -5,6 +5,8 @@ import Combine
 final class GameStore: ObservableObject {
     @Published var state: GameState
 
+    private var engine = PokerEngine()
+
     init(state: GameState = GameState()) {
         self.state = state
     }
@@ -33,7 +35,7 @@ final class GameStore: ObservableObject {
             }
             return
         }
-        state.players.append(Player(id: playerID, name: name, stack: 500))
+        state.players.append(Player(id: playerID, name: name, stack: PokerEngine.startingStack))
         if state.heroID == nil {
             state.heroID = playerID
         }
@@ -48,6 +50,9 @@ final class GameStore: ObservableObject {
     }
 
     func startGame() {
+        guard !state.players.isEmpty else { return }
+        engine.startGame(&state)
+        engine.startHand(&state)
         state.phase = .playing
     }
 
@@ -55,30 +60,27 @@ final class GameStore: ObservableObject {
         !state.players.isEmpty && state.players.allSatisfy { $0.isReady }
     }
 
-    // MARK: - Gameplay intents
-
-    func call() {
-        guard let heroID = state.heroID,
-              let idx = state.players.firstIndex(where: { $0.id == heroID }) else { return }
-        let amount = min(state.callAmount, state.players[idx].stack)
-        state.players[idx].stack -= amount
-        state.players[idx].currentBet += amount
-        state.pot += amount
+    var isHeroTurn: Bool {
+        guard let heroID = state.heroID else { return false }
+        return state.activePlayerID == heroID
     }
 
-    func raise(_ total: Int) {
-        guard let heroID = state.heroID,
-              let idx = state.players.firstIndex(where: { $0.id == heroID }) else { return }
-        let amount = min(total, state.players[idx].stack)
-        state.players[idx].stack -= amount
-        state.players[idx].currentBet += amount
-        state.pot += amount
+    // MARK: - Gameplay intents
+
+    func check() {
+        apply(.check)
+    }
+
+    func call() {
+        apply(.call(amount: state.callAmount))
+    }
+
+    func raise(_ targetTotal: Int) {
+        apply(.raise(amount: targetTotal))
     }
 
     func fold() {
-        guard let heroID = state.heroID,
-              let idx = state.players.firstIndex(where: { $0.id == heroID }) else { return }
-        state.players[idx].isFolded = true
+        apply(.fold)
     }
 
     // MARK: - End game / navigation
@@ -91,30 +93,52 @@ final class GameStore: ObservableObject {
     func resetToWaiting() {
         var fresh = GameState()
         fresh.phase = .waiting
-        fresh.players = state.players.enumerated().map { (i, p) in
+        fresh.gameID = state.gameID
+        fresh.players = state.players.map { p in
             var np = p
             np.isReady = false
             np.isFolded = false
             np.isEliminated = false
+            np.isDealer = false
             np.currentBet = 0
-            np.stack = 500
+            np.stack = PokerEngine.startingStack
             return np
         }
         fresh.heroID = state.heroID
         state = fresh
     }
 
+    // MARK: - Private
+
+    private func apply(_ action: BettingAction) {
+        guard state.phase == .playing else { return }
+        guard let heroID = state.heroID else { return }
+        guard engine.applyAction(&state, playerID: heroID, action: action) else { return }
+
+        guard state.activePlayerID == nil else { return }
+
+        if engine.shouldEndGame(state) {
+            endGame()
+        } else if engine.shouldStartNextHand(state) {
+            engine.startHand(&state)
+        }
+    }
+
     private func buildStats() -> [PlayerStats] {
-        state.players.map { p in
-            PlayerStats(
+        let survivors = state.players.filter { !$0.isEliminated && $0.stack > 0 }
+        let winnerID = survivors.count == 1 ? survivors[0].id : nil
+
+        return state.players.map { p in
+            let tracked = state.handStats[p.id] ?? PlayerHandStats()
+            return PlayerStats(
                 id: p.id,
                 name: p.name,
                 avatarIndex: p.avatarIndex,
-                handsWon: Int.random(in: 2...10),
-                handsPlayed: Int.random(in: 10...20),
-                biggestPot: Int.random(in: 40...200),
+                handsWon: tracked.handsWon,
+                handsPlayed: tracked.handsPlayed,
+                biggestPot: tracked.biggestPot,
                 finalStack: p.stack,
-                isWinner: !p.isEliminated && p.stack > 0
+                isWinner: p.id == winnerID
             )
         }
     }
@@ -150,12 +174,21 @@ extension GameStore {
         state.activePlayerID = "rose"
         state.callAmount = 4
         state.raiseAmount = 8
+        state.bettingRound = .flop
 
-        // Steve and Rose have posted bets this street
         state.players[3].currentBet = 2
         state.players[4].currentBet = 4
 
         return GameStore(state: state)
+    }
+
+    /// Single-player session after `startGame()` — use for solo flow testing.
+    static var mockSoloPlaying: GameStore {
+        let store = GameStore()
+        store.state.players = [Player(id: "solo", name: "Player", stack: 500, isReady: true, avatarIndex: 0)]
+        store.state.heroID = "solo"
+        store.startGame()
+        return store
     }
 
     static var mockWaiting: GameStore {

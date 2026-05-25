@@ -108,6 +108,26 @@ final class GameStore: ObservableObject {
         #endif
     }
 
+    func continueAfterHandSummary() {
+        guard state.phase == .handSummary else { return }
+        if engine.shouldEndGame(state) {
+            endGame()
+        } else {
+            engine.startHand(&state)
+            let previousPhase = state.phase
+            state.phase = .playing
+            #if DEBUG
+            GameLog.phaseChange(from: previousPhase, to: .playing, mode: state.gameMode)
+            GameLog.snapshot(state, event: "next hand")
+            #endif
+            scheduleBotTurnIfNeeded()
+        }
+    }
+
+    var sessionEndsAfterHandSummary: Bool {
+        engine.shouldEndGame(state)
+    }
+
     func resetToWaiting() {
         botScheduler.cancel()
         let previousPhase = state.phase
@@ -169,21 +189,13 @@ final class GameStore: ObservableObject {
         }
         GameLog.snapshot(state, event: "hand complete")
         #endif
-        if engine.shouldEndGame(state) {
-            #if DEBUG
-            GameLog.log("finalizeHandIfNeeded → endGame")
-            #endif
-            endGame()
-        } else if engine.shouldStartNextHand(state) {
-            #if DEBUG
-            GameLog.log("finalizeHandIfNeeded → next hand")
-            #endif
-            engine.startHand(&state)
-            #if DEBUG
-            GameLog.snapshot(state, event: "next hand")
-            #endif
-            scheduleBotTurnIfNeeded()
-        }
+        botScheduler.cancel()
+        state.endStats = buildHandSummaryStats()
+        let previousPhase = state.phase
+        state.phase = .handSummary
+        #if DEBUG
+        GameLog.phaseChange(from: previousPhase, to: .handSummary, mode: state.gameMode)
+        #endif
     }
 
     private func scheduleBotTurnIfNeeded() {
@@ -219,6 +231,24 @@ final class GameStore: ObservableObject {
         state.players.first(where: { $0.id == playerID })?.isBot == true
     }
 
+    private func buildHandSummaryStats() -> [PlayerStats] {
+        let winnerID = state.lastHandWinnerID
+        return state.players.map { p in
+            let tracked = state.handStats[p.id] ?? PlayerHandStats()
+            return PlayerStats(
+                id: p.id,
+                name: p.name,
+                avatarIndex: p.avatarIndex,
+                handsWon: tracked.handsWon,
+                handsPlayed: tracked.handsPlayed,
+                biggestPot: tracked.biggestPot,
+                finalStack: p.stack,
+                isWinner: p.id == winnerID
+            )
+        }
+        .sorted { $0.finalStack > $1.finalStack }
+    }
+
     private func buildStats() -> [PlayerStats] {
         let survivors = state.players.filter { !$0.isEliminated && $0.stack > 0 }
         let winnerID: String?
@@ -249,6 +279,7 @@ final class GameStore: ObservableObject {
                 isWinner: p.id == winnerID
             )
         }
+        .sorted { $0.finalStack > $1.finalStack }
     }
 }
 
@@ -310,6 +341,27 @@ extension GameStore {
             Player(id: "rose",  name: "Rose",  stack: 500, isReady: false, avatarIndex: 4),
         ]
         state.heroID = "rose"
+        return GameStore(state: state)
+    }
+
+    static var mockHandSummary: GameStore {
+        var state = GameState()
+        state.phase = .handSummary
+        state.players = [
+            Player(id: "hero", name: "You", stack: 520, avatarIndex: 0),
+            Player(id: "bot-1", name: "CPU 1", stack: 480, avatarIndex: 1, isBot: true),
+        ]
+        state.heroID = "hero"
+        state.lastHandWinnerID = "hero"
+        state.lastPotAwarded = 40
+        state.handStats = [
+            "hero": PlayerHandStats(handsWon: 2, handsPlayed: 3, biggestPot: 40),
+            "bot-1": PlayerHandStats(handsWon: 1, handsPlayed: 3, biggestPot: 20),
+        ]
+        state.endStats = [
+            PlayerStats(id: "hero", name: "You", avatarIndex: 0, handsWon: 2, handsPlayed: 3, biggestPot: 40, finalStack: 520, isWinner: true),
+            PlayerStats(id: "bot-1", name: "CPU 1", avatarIndex: 1, handsWon: 1, handsPlayed: 3, biggestPot: 20, finalStack: 480, isWinner: false),
+        ]
         return GameStore(state: state)
     }
 

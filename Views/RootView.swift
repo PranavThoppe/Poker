@@ -15,6 +15,9 @@ struct RootView: View {
                 case .playing:
                     GameView()
                         .transition(.opacity)
+                case .handSummary:
+                    HandSummaryView()
+                        .transition(.opacity)
                 case .ended:
                     EndGameView()
                         .transition(.opacity)
@@ -33,6 +36,10 @@ struct RootView: View {
 
 #Preview("Playing") {
     RootView().environmentObject(GameStore.mock)
+}
+
+#Preview("Hand Summary") {
+    RootView().environmentObject(GameStore.mockHandSummary)
 }
 
 #Preview("Ended") {

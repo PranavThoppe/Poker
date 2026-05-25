@@ -53,6 +53,7 @@ enum GameMode: String, Codable, Equatable {
 enum GamePhase: Codable, Equatable {
     case waiting
     case playing
+    case handSummary
     case ended
 }
 

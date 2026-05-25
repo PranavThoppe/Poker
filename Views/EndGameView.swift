@@ -129,7 +129,7 @@ private struct StatsRow: View {
         HStack(spacing: Theme.Spacing.lg) {
             statCell(label: "Won", value: "\(stat.handsWon)")
             statCell(label: "Best", value: "\(stat.biggestPot)")
-            statCell(label: "Final", value: stat.isWinner ? "\(stat.finalStack)" : "—")
+            statCell(label: "Final", value: "\(stat.finalStack)")
         }
     }
 

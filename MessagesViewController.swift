@@ -9,41 +9,6 @@ import UIKit
 import Messages
 import SwiftUI
 import Combine
-import os
-
-// MARK: - Route debug (filter Xcode console: "PokerRoute")
-
-private enum RouteDebug {
-    private static let log = Logger(subsystem: "com.poker.messages", category: "PokerRoute")
-
-    static func event(_ name: String, _ details: String = "") {
-        let line = details.isEmpty ? "[PokerRoute] \(name)" : "[PokerRoute] \(name) | \(details)"
-        log.info("\(line, privacy: .public)")
-        NSLog("%@", line)
-    }
-
-    static func messageContext(
-        label: String,
-        conversation: MSConversation,
-        message: MSMessage?,
-        activeConversation: MSConversation?
-    ) {
-        let convURL = conversation.selectedMessage?.url?.absoluteString ?? "nil"
-        let activeURL = activeConversation?.selectedMessage?.url?.absoluteString ?? "nil"
-        let msgURL = message?.url?.absoluteString ?? "nil"
-        let convDecode = conversation.selectedMessage?.url.flatMap { GameMessageURL.decode(from: $0) } != nil
-        let activeDecode = activeConversation?.selectedMessage?.url.flatMap { GameMessageURL.decode(from: $0) } != nil
-        let msgDecode = message?.url.flatMap { GameMessageURL.decode(from: $0) } != nil
-        event(
-            label,
-            """
-            conv.selectedMessage.url=\(convURL) decodeOK=\(convDecode) \
-            active.selectedMessage.url=\(activeURL) decodeOK=\(activeDecode) \
-            message.url=\(msgURL) decodeOK=\(msgDecode)
-            """
-        )
-    }
-}
 
 class MessagesViewController: MSMessagesAppViewController {
 
@@ -85,105 +50,61 @@ class MessagesViewController: MSMessagesAppViewController {
     
     override func willBecomeActive(with conversation: MSConversation) {
         super.willBecomeActive(with: conversation)
-        RouteDebug.messageContext(
-            label: "willBecomeActive",
-            conversation: conversation,
-            message: nil,
-            activeConversation: activeConversation
-        )
-        routeForConversation(conversation, allowDeferredSelection: true, source: "willBecomeActive")
+        routeForConversation(conversation, allowDeferredSelection: true)
     }
 
     override func didBecomeActive(with conversation: MSConversation) {
         super.didBecomeActive(with: conversation)
-        RouteDebug.messageContext(
-            label: "didBecomeActive",
-            conversation: conversation,
-            message: nil,
-            activeConversation: activeConversation
-        )
-        routeForConversation(conversation, allowDeferredSelection: true, source: "didBecomeActive")
+        routeForConversation(conversation, allowDeferredSelection: true)
     }
 
     override func didSelect(_ message: MSMessage, conversation: MSConversation) {
         super.didSelect(message, conversation: conversation)
-        RouteDebug.messageContext(
-            label: "didSelect",
-            conversation: conversation,
-            message: message,
-            activeConversation: activeConversation
-        )
-        guard let url = message.url else {
-            RouteDebug.event("didSelect", "no message.url → skip openGame")
-            return
-        }
-        if GameMessageURL.decode(from: url) == nil {
-            RouteDebug.event("didSelect", "url not poker game: \(url.absoluteString)")
-            return
-        }
-        openGame(from: url, conversation: conversation, source: "didSelect")
+        guard let url = message.url else { return }
+        guard GameMessageURL.decode(from: url) != nil else { return }
+        openGame(from: url, conversation: conversation)
     }
 
     private func routeForConversation(
         _ conversation: MSConversation,
-        allowDeferredSelection: Bool,
-        source: String
+        allowDeferredSelection: Bool
     ) {
-        RouteDebug.event(
-            "routeForConversation",
-            "source=\(source) allowDeferred=\(allowDeferredSelection) currentRoute=\(extensionHost.route)"
-        )
-        if let url = selectedGameURL(from: conversation, source: source) {
-            openGame(from: url, conversation: conversation, source: source)
+        if let url = selectedGameURL(from: conversation) {
+            openGame(from: url, conversation: conversation)
             return
         }
         guard allowDeferredSelection else {
-            RouteDebug.event("routeForConversation", "source=\(source) → fallback gameSelection (no URL after defer)")
             extensionHost.route = .gameSelection
             applyPresentationStyleForCurrentRoute()
             return
         }
-        RouteDebug.event("routeForConversation", "source=\(source) → scheduling deferred selection check")
         scheduleDeferredSelectionCheck(for: conversation)
     }
 
-    private func selectedGameURL(from conversation: MSConversation, source: String) -> URL? {
+    private func selectedGameURL(from conversation: MSConversation) -> URL? {
         // Only the conversation's selected bubble — not last-sent/persisted URLs.
         // Bubble taps are handled by `didSelect`; this covers selectedMessage becoming available on activate.
         if let url = conversation.selectedMessage?.url, GameMessageURL.decode(from: url) != nil {
-            RouteDebug.event("selectedGameURL", "source=\(source) hit=conversation.selectedMessage url=\(url.absoluteString)")
             return url
         }
         if let url = activeConversation?.selectedMessage?.url, GameMessageURL.decode(from: url) != nil {
-            RouteDebug.event("selectedGameURL", "source=\(source) hit=activeConversation.selectedMessage url=\(url.absoluteString)")
             return url
         }
-        RouteDebug.event("selectedGameURL", "source=\(source) no selected poker bubble")
         return nil
     }
 
     private func scheduleDeferredSelectionCheck(for conversation: MSConversation) {
         pendingRouteWorkItem?.cancel()
         let workItem = DispatchWorkItem { [weak self, weak conversation] in
-            guard let self, let conversation else {
-                RouteDebug.event("deferredCheck", "self or conversation deallocated")
-                return
-            }
-            RouteDebug.messageContext(
-                label: "deferredCheck",
-                conversation: conversation,
-                message: nil,
-                activeConversation: self.activeConversation
-            )
-            self.routeForConversation(conversation, allowDeferredSelection: false, source: "deferredCheck")
+            guard let self, let conversation else { return }
+            self.routeForConversation(conversation, allowDeferredSelection: false)
         }
         pendingRouteWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: workItem)
     }
 
-    private func openGame(from url: URL, conversation: MSConversation, source: String) {
+    private func openGame(from url: URL, conversation: MSConversation) {
         guard let gameState = GameStore.decode(from: url) else {
-            RouteDebug.event("openGame", "source=\(source) GameStore.decode failed url=\(url.absoluteString) → gameSelection")
             extensionHost.route = .gameSelection
             applyPresentationStyleForCurrentRoute()
             return
@@ -195,10 +116,6 @@ class MessagesViewController: MSMessagesAppViewController {
             name: Self.localPlayerName(for: conversation)
         )
         extensionHost.route = .game
-        RouteDebug.event(
-            "openGame",
-            "source=\(source) SUCCESS gameID=\(gameState.gameID) phase=\(gameState.phase) players=\(extensionHost.gameStore.state.players.count) route=game"
-        )
         requestPresentationStyle(.expanded)
     }
 
@@ -211,25 +128,12 @@ class MessagesViewController: MSMessagesAppViewController {
         pendingRouteWorkItem?.cancel()
         pendingRouteWorkItem = nil
         extensionHost.route = .gameSelection
-        RouteDebug.event("didResignActive", "route=gameSelection")
     }
    
     override func didReceive(_ message: MSMessage, conversation: MSConversation) {
-        RouteDebug.messageContext(
-            label: "didReceive",
-            conversation: conversation,
-            message: message,
-            activeConversation: activeConversation
-        )
-        guard let url = message.url else {
-            RouteDebug.event("didReceive", "no message.url")
-            return
-        }
-        guard GameMessageURL.decode(from: url) != nil else {
-            RouteDebug.event("didReceive", "not poker url: \(url.absoluteString)")
-            return
-        }
-        openGame(from: url, conversation: conversation, source: "didReceive")
+        guard let url = message.url else { return }
+        guard GameMessageURL.decode(from: url) != nil else { return }
+        openGame(from: url, conversation: conversation)
     }
     
     
@@ -272,16 +176,8 @@ class MessagesViewController: MSMessagesAppViewController {
         layout.image = UIImage(named: "BubbleCard")
         message.layout = layout
         message.url = GameMessageURL.encode(gameID: store.state.gameID, phase: store.state.phase)
-        RouteDebug.event(
-            "sendGameMessage",
-            "insert url=\(message.url?.absoluteString ?? "nil") gameID=\(store.state.gameID)"
-        )
         conversation.insert(message) { [weak self] error in
-            if let error {
-                RouteDebug.event("sendGameMessage", "insert failed: \(error.localizedDescription)")
-                return
-            }
-            RouteDebug.event("sendGameMessage", "insert OK → dismiss")
+            guard error == nil else { return }
             self?.dismiss()
         }
     }
@@ -295,10 +191,6 @@ class MessagesViewController: MSMessagesAppViewController {
             name: Self.localPlayerName(for: activeConversation)
         )
         extensionHost.route = .game
-        RouteDebug.event(
-            "startPracticeSession",
-            "gameID=\(store.state.gameID) gameMode=\(store.state.gameMode.rawValue) route=game"
-        )
         requestPresentationStyle(.expanded)
     }
 

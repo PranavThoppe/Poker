@@ -40,6 +40,8 @@ struct PokerEngine {
         state.streetBetLevel = 0
         state.lastRaiseSize = Self.bigBlind
         state.actedThisStreet = []
+        state.lastHandWinnerID = nil
+        state.lastPotAwarded = 0
         state.bettingRound = .preFlop
 
         rotateDealer(&state)
@@ -195,6 +197,8 @@ struct PokerEngine {
     ) {
         let winnerID = state.players[winnerIndex].id
         let potAmount = state.pot
+        state.lastHandWinnerID = winnerID
+        state.lastPotAwarded = potAmount
         if potAmount > 0 {
             state.players[winnerIndex].stack += potAmount
             var stats = state.handStats[winnerID, default: PlayerHandStats()]
@@ -222,11 +226,7 @@ struct PokerEngine {
 
         state.streetBetLevel = state.players[bbIdx].currentBet
         state.lastRaiseSize = Self.bigBlind
-        state.actedThisStreet = [state.players[sbIdx].id, state.players[bbIdx].id]
-
-        if state.players.count == 2 {
-            state.actedThisStreet = [state.players[sbIdx].id]
-        }
+        state.actedThisStreet = []
     }
 
     private mutating func postBet(_ state: inout GameState, playerIndex: Int, amount: Int) {

@@ -138,4 +138,6 @@ struct GameState: Codable {
     var streetBetLevel: Int = 0
     var lastRaiseSize: Int = 10
     var actedThisStreet: [String] = []
+    var lastHandWinnerID: String? = nil
+    var lastPotAwarded: Int = 0
 }

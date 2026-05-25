@@ -60,7 +60,12 @@ final class GameStore: ObservableObject {
         }
         engine.startGame(&state)
         engine.startHand(&state)
+        let previousPhase = state.phase
         state.phase = .playing
+        #if DEBUG
+        GameLog.phaseChange(from: previousPhase, to: .playing, mode: state.gameMode)
+        GameLog.snapshot(state, event: "startGame")
+        #endif
         scheduleBotTurnIfNeeded()
     }
 
@@ -94,12 +99,18 @@ final class GameStore: ObservableObject {
     // MARK: - End game / navigation
 
     func endGame() {
+        let previousPhase = state.phase
         state.phase = .ended
         state.endStats = buildStats()
+        #if DEBUG
+        GameLog.phaseChange(from: previousPhase, to: .ended, mode: state.gameMode)
+        GameLog.snapshot(state, event: "endGame")
+        #endif
     }
 
     func resetToWaiting() {
         botScheduler.cancel()
+        let previousPhase = state.phase
         var fresh = GameState()
         fresh.phase = .waiting
         fresh.gameID = state.gameID
@@ -118,6 +129,10 @@ final class GameStore: ObservableObject {
             }
         fresh.heroID = state.heroID
         state = fresh
+        #if DEBUG
+        GameLog.phaseChange(from: previousPhase, to: .waiting, mode: state.gameMode)
+        GameLog.snapshot(state, event: "resetToWaiting")
+        #endif
     }
 
     // MARK: - Private
@@ -131,6 +146,15 @@ final class GameStore: ObservableObject {
         guard state.phase == .playing else { return }
         guard engine.applyAction(&state, playerID: playerID, action: action) else { return }
 
+        #if DEBUG
+        if playerID == state.heroID {
+            GameLog.heroAction(action, state: state)
+        } else {
+            GameLog.playerAction(playerID: playerID, action: action, state: state)
+            GameLog.snapshot(state, event: "after bot action")
+        }
+        #endif
+
         if state.activePlayerID == nil {
             finalizeHandIfNeeded()
         } else {
@@ -139,10 +163,25 @@ final class GameStore: ObservableObject {
     }
 
     private func finalizeHandIfNeeded() {
+        #if DEBUG
+        if state.lastPotAwarded > 0, let winnerID = state.lastHandWinnerID {
+            GameLog.potAwarded(amount: state.lastPotAwarded, winnerID: winnerID)
+        }
+        GameLog.snapshot(state, event: "hand complete")
+        #endif
         if engine.shouldEndGame(state) {
+            #if DEBUG
+            GameLog.log("finalizeHandIfNeeded → endGame")
+            #endif
             endGame()
         } else if engine.shouldStartNextHand(state) {
+            #if DEBUG
+            GameLog.log("finalizeHandIfNeeded → next hand")
+            #endif
             engine.startHand(&state)
+            #if DEBUG
+            GameLog.snapshot(state, event: "next hand")
+            #endif
             scheduleBotTurnIfNeeded()
         }
     }
@@ -182,7 +221,20 @@ final class GameStore: ObservableObject {
 
     private func buildStats() -> [PlayerStats] {
         let survivors = state.players.filter { !$0.isEliminated && $0.stack > 0 }
-        let winnerID = survivors.count == 1 ? survivors[0].id : nil
+        let winnerID: String?
+        if survivors.count == 1 {
+            winnerID = survivors[0].id
+        } else if let leader = state.players.max(by: { $0.stack < $1.stack }) {
+            let topStack = leader.stack
+            let tied = state.players.filter { $0.stack == topStack }
+            if tied.count > 1, let heroID = state.heroID, tied.contains(where: { $0.id == heroID }) {
+                winnerID = heroID
+            } else {
+                winnerID = leader.id
+            }
+        } else {
+            winnerID = nil
+        }
 
         return state.players.map { p in
             let tracked = state.handStats[p.id] ?? PlayerHandStats()

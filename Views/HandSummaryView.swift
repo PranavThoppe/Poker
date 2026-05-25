@@ -41,7 +41,10 @@ struct HandSummaryView: View {
             buttonTitle: buttonTitle,
             onButton: continueIfNeeded,
             countdownStartedAt: countdownStartedAt,
-            countdownDuration: Self.autoAdvanceSeconds
+            countdownDuration: Self.autoAdvanceSeconds,
+            buttonFillColor: Theme.Color.green,
+            buttonTrackColor: Theme.Color.green.opacity(0.25),
+            buttonTextColor: Theme.Color.primary
         )
         .task(id: handSummaryTaskID) {
             guard store.state.phase == .handSummary else { return }

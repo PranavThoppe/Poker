@@ -96,7 +96,7 @@ struct WaitingRoomView: View {
                 .foregroundStyle(Theme.Color.background)
                 .frame(maxWidth: .infinity)
                 .frame(height: Theme.Size.actionPillH)
-                .background(Color.green.opacity(0.85))
+                .background(Theme.Color.green)
                 .clipShape(Capsule())
         }
         .transition(.move(edge: .bottom).combined(with: .opacity))

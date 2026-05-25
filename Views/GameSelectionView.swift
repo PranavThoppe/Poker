@@ -147,7 +147,7 @@ struct GameSelectionView: View {
                 if isSelected {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.system(size: 22))
-                        .foregroundStyle(Theme.Color.red)
+                        .foregroundStyle(Theme.Color.green)
                 }
             }
             .padding(Theme.Spacing.md)
@@ -157,7 +157,7 @@ struct GameSelectionView: View {
                 Group {
                     if isSelected {
                         RoundedRectangle(cornerRadius: Theme.Radius.tile)
-                            .strokeBorder(Theme.Color.red, lineWidth: 2)
+                            .strokeBorder(Theme.Color.green, lineWidth: 2)
                     }
                 }
             )

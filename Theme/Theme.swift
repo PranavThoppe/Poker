@@ -9,6 +9,7 @@ enum Theme {
         static let primary     = SwiftUI.Color.white
         static let secondary   = SwiftUI.Color(white: 0.55)
         static let red         = SwiftUI.Color(red: 0.90, green: 0.20, blue: 0.20)
+        static let green       = SwiftUI.Color.green.opacity(0.85)
         static let chipYellow  = SwiftUI.Color(red: 0.95, green: 0.78, blue: 0.18)
         static let cardFace    = SwiftUI.Color.white
         static let suitRed     = SwiftUI.Color(red: 0.85, green: 0.14, blue: 0.14)

@@ -11,6 +11,9 @@ struct ResultsScreenView: View {
     let onButton: () -> Void
     var countdownStartedAt: Date? = nil
     var countdownDuration: TimeInterval = 5
+    var buttonFillColor: Color = Theme.Color.primary
+    var buttonTrackColor: Color = Theme.Color.surface
+    var buttonTextColor: Color = Theme.Color.background
 
     var body: some View {
         ZStack {
@@ -96,14 +99,18 @@ struct ResultsScreenView: View {
         Button(action: onButton) {
             ZStack {
                 if let progress {
-                    CountdownCapsuleFill(progress: progress)
+                    CountdownCapsuleFill(
+                        progress: progress,
+                        trackColor: buttonTrackColor,
+                        fillColor: buttonFillColor
+                    )
                 } else {
-                    Capsule().fill(Theme.Color.primary)
+                    Capsule().fill(buttonFillColor)
                 }
 
                 Text(buttonTitle)
                     .font(Theme.Font.actionLabel)
-                    .foregroundStyle(Theme.Color.background)
+                    .foregroundStyle(buttonTextColor)
             }
             .frame(maxWidth: .infinity)
             .frame(height: Theme.Size.actionPillH)

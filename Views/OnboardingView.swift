@@ -7,7 +7,7 @@ struct OnboardingView: View {
     @StateObject private var service = ProfileService.shared
 
     @State private var displayName: String = ""
-    @State private var selectedAvatarIndex: Int = 0
+    @State private var selectedAvatarIndex: Int? = nil
     @State private var isSaving: Bool = false
     @State private var isShuffling: Bool = false
     @State private var spinResults: [Int] = []   // stores final index of each completed spin
@@ -65,19 +65,33 @@ struct OnboardingView: View {
     private var selectedAvatarPreview: some View {
         VStack(spacing: Theme.Spacing.sm) {
             if spinResults.count < 2 {
-                // Spinning phase — show the live avatar + spin button
-                AvatarView(
-                    player: previewPlayer(avatarIndex: selectedAvatarIndex),
-                    size: 80
-                )
+                // Spinning phase — empty until first spin, then live avatar
+                if spinResults.isEmpty && !isShuffling {
+                    emptyAvatarPlaceholder(size: 80)
+                } else if let index = selectedAvatarIndex {
+                    AvatarView(
+                        player: previewPlayer(avatarIndex: index),
+                        size: 80
+                    )
+                }
 
                 Button(action: startShuffle) {
                     Label(spinResults.count == 1 ? "1 more spin" : "Shuffle", systemImage: "shuffle")
-                        .font(Theme.Font.caption)
-                        .foregroundStyle(isShuffling ? Theme.Color.primary : Theme.Color.secondary)
+                        .font(Theme.Font.subhead)
+                        .foregroundStyle(isShuffling ? Theme.Color.secondary : Theme.Color.primary)
+                        .padding(.horizontal, Theme.Spacing.lg)
+                        .frame(height: 40)
+                        .background(Theme.Color.surface)
+                        .clipShape(Capsule())
+                        .overlay(
+                            Capsule()
+                                .strokeBorder(Theme.Color.secondary.opacity(0.35), lineWidth: 1)
+                        )
                 }
                 .buttonStyle(.plain)
                 .disabled(isShuffling)
+                .opacity(isShuffling ? 0.6 : 1)
+                .padding(.top, Theme.Spacing.sm)
             } else {
                 // Both spins done — let the user pick between the two results
                 Text("Pick your avatar")
@@ -108,6 +122,16 @@ struct OnboardingView: View {
                 }
             }
         }
+    }
+
+    private func emptyAvatarPlaceholder(size: CGFloat) -> some View {
+        Circle()
+            .fill(Theme.Color.surface)
+            .frame(width: size, height: size)
+            .overlay(
+                Circle()
+                    .strokeBorder(Theme.Color.secondary.opacity(0.3), lineWidth: 1)
+            )
     }
 
     private var avatarPicker: some View {
@@ -200,7 +224,7 @@ struct OnboardingView: View {
         // Intervals grow progressively — fast at first, then slow to a stop.
         let intervals: [Double] = [0.05, 0.05, 0.06, 0.08, 0.10, 0.13, 0.17, 0.22, 0.28, 0.36]
         Task { @MainActor in
-            var last = selectedAvatarIndex
+            var last: Int? = selectedAvatarIndex
             for interval in intervals {
                 try? await Task.sleep(for: .seconds(interval))
                 var next: Int
@@ -210,13 +234,17 @@ struct OnboardingView: View {
                     selectedAvatarIndex = next
                 }
             }
-            spinResults.append(selectedAvatarIndex)
+            if let finalIndex = selectedAvatarIndex {
+                spinResults.append(finalIndex)
+            }
             isShuffling = false
         }
     }
 
     private var canSave: Bool {
         !displayName.trimmingCharacters(in: .whitespaces).isEmpty
+            && spinResults.count >= 2
+            && selectedAvatarIndex != nil
     }
 
     private func previewPlayer(avatarIndex: Int) -> Player {
@@ -225,12 +253,12 @@ struct OnboardingView: View {
 
     private func save() {
         let trimmed = displayName.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty, let avatarIndex = selectedAvatarIndex else { return }
         errorMessage = nil
         isSaving = true
         Task {
             do {
-                try await ProfileService.shared.saveProfile(name: trimmed, avatarIndex: selectedAvatarIndex)
+                try await ProfileService.shared.saveProfile(name: trimmed, avatarIndex: avatarIndex)
                 onComplete()
             } catch {
                 errorMessage = "Couldn't save profile. Check your connection and try again."

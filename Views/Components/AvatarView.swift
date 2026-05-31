@@ -1,43 +1,27 @@
 import SwiftUI
 
-// MARK: - Avatar symbols (stand-ins for Memoji)
+// MARK: - Avatar emojis
 
-private let avatarSymbols = [
-    "person.crop.circle.fill",
-    "mustache.fill",
-    "person.crop.circle.badge.moon.fill",
-    "person.crop.circle.fill",
-    "person.crop.circle.badge.checkmark.fill"
-]
-
-private let avatarColors: [Color] = [
-    Color(red: 0.65, green: 0.82, blue: 0.99),
-    Color(red: 0.75, green: 0.60, blue: 0.42),
-    Color(red: 0.70, green: 0.50, blue: 0.65),
-    Color(red: 0.55, green: 0.70, blue: 0.55),
-    Color(red: 0.95, green: 0.80, blue: 0.50)
-]
+private let avatarEmojis = ["😵‍💫", "💀", "😴", "🥳", "🤪", "😱", "🐸", "😁", "😇", "🥹", "😍", "😫", "🤯", "🤬", "😡", "🥵", "🤗", "😬", "🫨", "🤢", "🥴", "🥱", "🤮", "🤠", "🤑", "😈", "🤡", "💩", "👽", "😏"]
 
 struct AvatarView: View {
     let player: Player
     var size: CGFloat = Theme.Size.avatarMD
     var showDealer: Bool = false
 
-    private var symbolName: String {
-        avatarSymbols[player.avatarIndex % avatarSymbols.count]
-    }
-    private var tint: Color {
-        avatarColors[player.avatarIndex % avatarColors.count]
+    private var emoji: String {
+        avatarEmojis[player.avatarIndex % avatarEmojis.count]
     }
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
-            Image(systemName: symbolName)
-                .resizable()
-                .scaledToFit()
-                .foregroundStyle(tint)
-                .frame(width: size, height: size)
-                .clipShape(Circle())
+            ZStack {
+                Circle()
+                    .fill(Theme.Color.surface)
+                    .frame(width: size, height: size)
+                Text(emoji)
+                    .font(.system(size: size * 0.6))
+            }
 
             if showDealer || player.isDealer {
                 DealerBadge()

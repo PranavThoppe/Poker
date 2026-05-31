@@ -74,7 +74,7 @@ class MessagesViewController: MSMessagesAppViewController {
             return
         }
         guard allowDeferredSelection else {
-            extensionHost.route = .gameSelection
+            extensionHost.route = ProfileService.shared.loadLocal() == nil ? .onboarding : .gameSelection
             applyPresentationStyleForCurrentRoute()
             return
         }
@@ -120,8 +120,7 @@ class MessagesViewController: MSMessagesAppViewController {
     }
 
     private static func localPlayerName(for conversation: MSConversation?) -> String {
-        // Onboarding / display names deferred; use a stable placeholder per device.
-        "Player"
+        ProfileService.shared.profile?.displayName ?? "Player"
     }
     
     override func didResignActive(with conversation: MSConversation) {
@@ -203,6 +202,7 @@ class MessagesViewController: MSMessagesAppViewController {
 @MainActor
 private final class ExtensionHostModel: ObservableObject {
     enum Route {
+        case onboarding
         case gameSelection
         case game
     }
@@ -219,7 +219,7 @@ private final class ExtensionHostModel: ObservableObject {
 
     var prefersExpandedPresentation: Bool {
         switch route {
-        case .gameSelection, .game: return true
+        case .onboarding, .gameSelection, .game: return true
         }
     }
 }
@@ -230,6 +230,10 @@ private struct ExtensionShellView: View {
     var body: some View {
         Group {
             switch model.route {
+            case .onboarding:
+                OnboardingView {
+                    model.route = .gameSelection
+                }
             case .gameSelection:
                 GameSelectionView(
                     onClassicSend: { model.onSendToChat?() ?? () },

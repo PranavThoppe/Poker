@@ -36,6 +36,20 @@ class MessagesViewController: MSMessagesAppViewController {
             self?.startPracticeSession()
         }
 
+        extensionHost.onboardingDidComplete = { [weak self] in
+            guard let self else { return }
+            if let url = self.extensionHost.pendingGameURL {
+                self.extensionHost.pendingGameURL = nil
+                guard let conversation = self.activeConversation else {
+                    self.extensionHost.route = .gameSelection
+                    return
+                }
+                self.openGame(from: url, conversation: conversation)
+            } else {
+                self.extensionHost.route = .gameSelection
+            }
+        }
+
         let shell = ExtensionShellView(model: extensionHost)
         let host = UIHostingController(rootView: shell)
         addChild(host)
@@ -109,6 +123,12 @@ class MessagesViewController: MSMessagesAppViewController {
             applyPresentationStyleForCurrentRoute()
             return
         }
+        guard ProfileService.shared.profile != nil else {
+            extensionHost.pendingGameURL = url
+            extensionHost.route = .onboarding
+            applyPresentationStyleForCurrentRoute()
+            return
+        }
         extensionHost.gameStore.state = gameState
         extensionHost.gameStore.syncer = SupabaseSync()
         extensionHost.gameStore.isHost = false
@@ -131,7 +151,8 @@ class MessagesViewController: MSMessagesAppViewController {
     override func didResignActive(with conversation: MSConversation) {
         pendingRouteWorkItem?.cancel()
         pendingRouteWorkItem = nil
-        extensionHost.route = .gameSelection
+        extensionHost.pendingGameURL = nil
+        extensionHost.route = ProfileService.shared.profile == nil ? .onboarding : .gameSelection
     }
    
     override func didReceive(_ message: MSMessage, conversation: MSConversation) {
@@ -192,6 +213,11 @@ class MessagesViewController: MSMessagesAppViewController {
 
     /// Local practice session — no iMessage bubble.
     private func startPracticeSession() {
+        guard ProfileService.shared.profile != nil else {
+            extensionHost.route = .onboarding
+            applyPresentationStyleForCurrentRoute()
+            return
+        }
         let store = extensionHost.gameStore
         store.state = GameStore.createNew(mode: .practiceVsCPU)
         store.joinGame(
@@ -219,8 +245,10 @@ private final class ExtensionHostModel: ObservableObject {
     @Published var route: Route = .gameSelection
     let gameStore: GameStore
 
+    var pendingGameURL: URL?
     var onSendToChat: (() -> Void)?
     var onPracticePlay: (() -> Void)?
+    var onboardingDidComplete: (() -> Void)?
 
     init(gameStore: GameStore) {
         self.gameStore = gameStore
@@ -241,7 +269,7 @@ private struct ExtensionShellView: View {
             switch model.route {
             case .onboarding:
                 OnboardingView {
-                    model.route = .gameSelection
+                    model.onboardingDidComplete?()
                 }
             case .gameSelection:
                 GameSelectionView(

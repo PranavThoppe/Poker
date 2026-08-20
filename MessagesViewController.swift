@@ -109,12 +109,17 @@ class MessagesViewController: MSMessagesAppViewController {
             applyPresentationStyleForCurrentRoute()
             return
         }
-        let localID = conversation.localParticipantIdentifier.uuidString
         extensionHost.gameStore.state = gameState
+        extensionHost.gameStore.syncer = SupabaseSync()
+        extensionHost.gameStore.isHost = false
+        // Join locally (adds hero to player list); publish is deferred until the first poll
+        // returns the host's state so we don't overwrite it with a bare single-player state.
         extensionHost.gameStore.joinGame(
-            playerID: localID,
-            name: Self.localPlayerName(for: conversation)
+            playerID: ProfileService.deviceID,
+            name: Self.localPlayerName(for: conversation),
+            avatarIndex: ProfileService.shared.profile?.avatarIndex ?? 0
         )
+        extensionHost.gameStore.subscribeToRoom()
         extensionHost.route = .game
         requestPresentationStyle(.expanded)
     }
@@ -159,10 +164,14 @@ class MessagesViewController: MSMessagesAppViewController {
 
         let store = extensionHost.gameStore
         store.state = GameStore.createNew(mode: .classicPoker)
+        store.syncer = SupabaseSync()
+        store.isHost = true
         store.joinGame(
-            playerID: conversation.localParticipantIdentifier.uuidString,
-            name: Self.localPlayerName(for: conversation)
+            playerID: ProfileService.deviceID,
+            name: Self.localPlayerName(for: conversation),
+            avatarIndex: ProfileService.shared.profile?.avatarIndex ?? 0
         )
+        store.subscribeToRoom()
 
         let message = MSMessage()
         let layout = MSMessageTemplateLayout()

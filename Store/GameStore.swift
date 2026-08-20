@@ -5,6 +5,11 @@ import Combine
 final class GameStore: ObservableObject {
     @Published var state: GameState
 
+    /// Sync backend; replaced with `SupabaseSync()` for classic multiplayer sessions.
+    var syncer: GameSyncing = MockSync()
+    /// True on the device that created the game room (runs the engine authoritatively).
+    var isHost: Bool = false
+
     private var engine = PokerEngine()
     private let botScheduler = BotTurnScheduler()
     private var botSessionConfig = BotSessionConfig.default
@@ -32,17 +37,19 @@ final class GameStore: ObservableObject {
         return state
     }
 
-    func joinGame(playerID: String, name: String) {
+    func joinGame(playerID: String, name: String, avatarIndex: Int = 0) {
         if let existing = state.players.firstIndex(where: { $0.id == playerID }) {
             if state.heroID == nil {
                 state.heroID = state.players[existing].id
             }
             return
         }
-        state.players.append(Player(id: playerID, name: name, stack: PokerEngine.startingStack))
+        state.players.append(Player(id: playerID, name: name, stack: PokerEngine.startingStack, avatarIndex: avatarIndex))
         if state.heroID == nil {
             state.heroID = playerID
         }
+        // Host creates the room row immediately; guest defers until the first poll.
+        if isHost { publishCurrentState() }
     }
 
     // MARK: - Waiting room intents
@@ -51,6 +58,7 @@ final class GameStore: ObservableObject {
         guard let heroID = state.heroID,
               let idx = state.players.firstIndex(where: { $0.id == heroID }) else { return }
         state.players[idx].isReady.toggle()
+        publishCurrentState()
     }
 
     func startGame() {
@@ -66,6 +74,11 @@ final class GameStore: ObservableObject {
         GameLog.phaseChange(from: previousPhase, to: .playing, mode: state.gameMode)
         GameLog.snapshot(state, event: "startGame")
         #endif
+        // Host writes each player's hole cards so guests can fetch their own.
+        if state.gameMode == .classicPoker && isHost {
+            writeHoleCardsToSupabase()
+        }
+        publishCurrentState()
         scheduleBotTurnIfNeeded()
     }
 
@@ -106,10 +119,14 @@ final class GameStore: ObservableObject {
         GameLog.phaseChange(from: previousPhase, to: .ended, mode: state.gameMode)
         GameLog.snapshot(state, event: "endGame")
         #endif
+        publishCurrentState()
     }
 
     func continueAfterHandSummary() {
         guard state.phase == .handSummary else { return }
+        // In multiplayer, only the host advances the engine to the next hand.
+        // The guest's UI shows a waiting indicator; the host's published state will update them.
+        if state.gameMode == .classicPoker && !isHost { return }
         if engine.shouldEndGame(state) {
             endGame()
         } else {
@@ -120,6 +137,8 @@ final class GameStore: ObservableObject {
             GameLog.phaseChange(from: previousPhase, to: .playing, mode: state.gameMode)
             GameLog.snapshot(state, event: "next hand")
             #endif
+            if isHost { writeHoleCardsToSupabase() }
+            publishCurrentState()
             scheduleBotTurnIfNeeded()
         }
     }
@@ -153,6 +172,56 @@ final class GameStore: ObservableObject {
         GameLog.phaseChange(from: previousPhase, to: .waiting, mode: state.gameMode)
         GameLog.snapshot(state, event: "resetToWaiting")
         #endif
+        publishCurrentState()
+    }
+
+    // MARK: - Multiplayer sync
+
+    /// Starts the Supabase polling loop for the current game room.
+    /// Call after setting `syncer` and `isHost`, once `state.gameID` is known.
+    func subscribeToRoom() {
+        let roomID = state.gameID.uuidString
+        syncer.subscribe(roomID: roomID) { [weak self] remoteState in
+            guard let self else { return }
+
+            // Detect whether our own player is present in the incoming state.
+            let heroAbsent: Bool
+            if let heroID = self.state.heroID {
+                heroAbsent = !remoteState.players.contains(where: { $0.id == heroID })
+            } else {
+                heroAbsent = false
+            }
+
+            // If the remote shows betting complete but we hold the hole card data,
+            // we are the host and must run the showdown locally before publishing.
+            let needsShowdown = remoteState.phase == .playing
+                && remoteState.activePlayerID == nil
+                && !self.state.holeCardsByPlayer.isEmpty
+
+            self.mergeRemoteState(remoteState)
+
+            // Guest just joined: re-added self into the player list — push it back.
+            if heroAbsent {
+                self.publishCurrentState()
+            }
+
+            // Host resolves a showdown triggered by the guest's last action.
+            if needsShowdown {
+                self.finalizeHandIfNeeded()
+                self.publishCurrentState()
+            }
+
+            // Guest: fetch private hole cards whenever they are missing in playing phase.
+            if self.state.phase == .playing && self.state.heroHoleCards.isEmpty {
+                self.fetchHeroHoleCards()
+            }
+        }
+    }
+
+    /// Fire-and-forget publish of the current state. No-op in practice mode.
+    func publishCurrentState() {
+        guard state.gameMode == .classicPoker else { return }
+        syncer.publish(state: state, roomID: state.gameID.uuidString)
     }
 
     // MARK: - Private
@@ -180,9 +249,16 @@ final class GameStore: ObservableObject {
         } else {
             scheduleBotTurnIfNeeded()
         }
+        // Publish after every action (including after finalization, which may have changed phase).
+        publishCurrentState()
     }
 
     private func finalizeHandIfNeeded() {
+        // In multiplayer, only the engine authority (whoever has holeCardsByPlayer) resolves
+        // the showdown. A guest without hole card data publishes the pre-showdown state and
+        // waits for the host to finalize via the poll loop in subscribeToRoom().
+        if state.gameMode == .classicPoker && state.holeCardsByPlayer.isEmpty { return }
+
         #if DEBUG
         if state.lastPotAwarded > 0, let winnerID = state.lastHandWinnerID {
             GameLog.potAwarded(amount: state.lastPotAwarded, winnerID: winnerID)
@@ -229,6 +305,56 @@ final class GameStore: ObservableObject {
 
     private func isBot(_ playerID: String) -> Bool {
         state.players.first(where: { $0.id == playerID })?.isBot == true
+    }
+
+    /// Merges a remote `GameState` into local state while preserving per-client private data:
+    /// the hero's identity, their hole cards, and the host's full `holeCardsByPlayer` map.
+    private func mergeRemoteState(_ remote: GameState) {
+        guard let heroID = state.heroID else {
+            state = remote
+            return
+        }
+        let heroPlayer       = state.players.first(where: { $0.id == heroID })
+        let savedHeroCards   = state.heroHoleCards      // non-empty only after cards are fetched
+        let savedHoleCards   = state.holeCardsByPlayer  // non-empty only on the host
+
+        state = remote
+        state.heroID = heroID
+
+        // Restore private card data that was stripped from the published state.
+        if !savedHeroCards.isEmpty { state.heroHoleCards = savedHeroCards }
+        state.holeCardsByPlayer = savedHoleCards
+
+        // Re-insert local hero if the remote snapshot doesn't include them yet
+        // (normal during the initial join — guest publishes themselves next).
+        if !state.players.contains(where: { $0.id == heroID }), let hero = heroPlayer {
+            state.players.append(hero)
+        }
+    }
+
+    /// Fetches the hero's hole cards from `player_hole_cards` and stores them locally.
+    /// Retried on every poll tick until the host has written them.
+    private func fetchHeroHoleCards() {
+        guard let heroID = state.heroID,
+              let supabaseSync = syncer as? SupabaseSync else { return }
+        let roomID = state.gameID.uuidString
+        Task {
+            if let cards = try? await supabaseSync.fetchHoleCards(roomID: roomID, playerID: heroID) {
+                state.heroHoleCards = cards
+            }
+        }
+    }
+
+    /// Host writes every player's hole cards to `player_hole_cards` after dealing.
+    private func writeHoleCardsToSupabase() {
+        guard let supabaseSync = syncer as? SupabaseSync else { return }
+        let holeCards = state.holeCardsByPlayer
+        let roomID    = state.gameID.uuidString
+        Task {
+            for (playerID, cards) in holeCards {
+                try? await supabaseSync.upsertHoleCards(roomID: roomID, playerID: playerID, cards: cards)
+            }
+        }
     }
 
     private func buildHandSummaryStats() -> [PlayerStats] {

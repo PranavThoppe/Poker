@@ -1,0 +1,145 @@
+import Foundation
+
+/// Implements `GameSyncing` against the Supabase REST API.
+///
+/// Sync model (turn-based, so 2-second polling is sufficient):
+/// - `subscribe` starts a Task loop that GETs the game_rooms row every 2 s.
+///   Change detection uses `updated_at`; `onUpdate` is only called when it differs.
+/// - `publish` upserts game_rooms with a sanitised public state (no private card data).
+/// - Hole cards are written/read separately through `player_hole_cards`.
+final class SupabaseSync: GameSyncing {
+
+    private var pollTask: Task<Void, Never>?
+
+    deinit { pollTask?.cancel() }
+
+    // MARK: - GameSyncing
+
+    func subscribe(roomID: String, onUpdate: @escaping @MainActor (GameState) -> Void) {
+        pollTask?.cancel()
+        pollTask = Task { [weak self] in
+            guard self != nil else { return }
+            // `lastSeenUpdatedAt` lives entirely inside this Task — no shared mutable state.
+            var lastSeenUpdatedAt: String? = nil
+
+            func fetchOnce() async {
+                do {
+                    let rows: [GameRoomRow] = try await SupabaseClient.shared.get(
+                        path: "game_rooms",
+                        query: ["id": "eq.\(roomID)", "select": "*"]
+                    )
+                    guard let row = rows.first else { return }
+                    // Only notify when something actually changed.
+                    guard row.updatedAt != lastSeenUpdatedAt else { return }
+                    lastSeenUpdatedAt = row.updatedAt
+                    await onUpdate(row.publicState)
+                } catch {
+                    // Transient errors (network, extension suspended) are expected — ignore silently.
+                }
+            }
+
+            await fetchOnce()
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled else { return }
+                await fetchOnce()
+            }
+        }
+    }
+
+    func publish(state: GameState, roomID: String) {
+        Task { try? await Self.publishRoom(state: state, roomID: roomID) }
+    }
+
+    func unsubscribe(roomID: String) {
+        pollTask?.cancel()
+        pollTask = nil
+    }
+
+    // MARK: - Hole cards (called directly by GameStore)
+
+    /// Host writes each player's private hole cards after dealing.
+    func upsertHoleCards(roomID: String, playerID: String, cards: [Card]) async throws {
+        struct Payload: Encodable {
+            let room_id: String
+            let player_id: String
+            let cards: [Card]
+        }
+        try await SupabaseClient.shared.upsert(
+            path: "player_hole_cards",
+            body: Payload(room_id: roomID, player_id: playerID, cards: cards)
+        )
+    }
+
+    /// Guest fetches their own hole cards after the host has dealt.
+    func fetchHoleCards(roomID: String, playerID: String) async throws -> [Card]? {
+        struct Row: Decodable { let cards: [Card] }
+        let rows: [Row] = try await SupabaseClient.shared.get(
+            path: "player_hole_cards",
+            query: [
+                "room_id":  "eq.\(roomID)",
+                "player_id": "eq.\(playerID)",
+                "select":   "cards"
+            ]
+        )
+        return rows.first?.cards
+    }
+
+    // MARK: - Private
+
+    private static func publishRoom(state: GameState, roomID: String) async throws {
+        // Strip all private / per-client fields before writing to the shared row.
+        var pub = state
+        pub.holeCardsByPlayer = [:]
+        pub.remainingDeck     = []
+        pub.heroHoleCards     = []
+        pub.heroHandRank      = nil
+        pub.heroID            = nil   // Each client tracks their own hero locally.
+
+        struct Payload: Encodable {
+            let id: String
+            let game_mode: String
+            let phase: String
+            let host_id: String
+            let public_state: GameState
+            let updated_at: String
+        }
+
+        let payload = Payload(
+            id:           roomID,
+            game_mode:    state.gameMode.rawValue,
+            phase:        state.phase.supabaseValue,
+            host_id:      ProfileService.deviceID,
+            public_state: pub,
+            updated_at:   ISO8601DateFormatter().string(from: Date())
+        )
+        try await SupabaseClient.shared.upsert(path: "game_rooms", body: payload)
+    }
+}
+
+// MARK: - Private Decodable row type
+
+private struct GameRoomRow: Decodable {
+    let id: String
+    let publicState: GameState
+    let updatedAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case publicState = "public_state"
+        case updatedAt   = "updated_at"
+    }
+}
+
+// MARK: - GamePhase → Supabase column string
+
+private extension GamePhase {
+    var supabaseValue: String {
+        switch self {
+        case .waiting:     return "waiting"
+        case .playing:     return "playing"
+        case .handSummary: return "handSummary"
+        case .ended:       return "ended"
+        }
+    }
+}

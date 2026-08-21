@@ -402,12 +402,22 @@ final class GameStore: ObservableObject {
         state = remote
         state.heroID = heroID
 
-        if !isNewHand, !savedHeroCards.isEmpty {
+        if isNewHand {
+            // Drop the previous hand's private cards so the guest fetches the new deal.
+            if !isHost {
+                state.heroHoleCards = []
+            } else if !savedHeroCards.isEmpty {
+                state.heroHoleCards = savedHeroCards
+            }
+        } else if !savedHeroCards.isEmpty {
             state.heroHoleCards = savedHeroCards
         }
-        state.holeCardsByPlayer = savedHoleCards
-        if isHost, !savedDeck.isEmpty {
-            state.remainingDeck = savedDeck
+
+        if isHost {
+            state.holeCardsByPlayer = savedHoleCards
+            if !savedDeck.isEmpty {
+                state.remainingDeck = savedDeck
+            }
         }
 
         if heroWasMissing, let hero = heroPlayer {
@@ -417,6 +427,10 @@ final class GameStore: ObservableObject {
         engine.syncBettingUI(&state)
         engine.updateHeroDisplay(&state)
         GameLog.remoteStateMerged(state: state, heroRestored: heroWasMissing)
+
+        if state.phase == .playing, state.heroHoleCards.isEmpty {
+            fetchHeroHoleCards()
+        }
     }
 
     private func resolveHostPendingState() {
@@ -454,13 +468,22 @@ final class GameStore: ObservableObject {
               !isFetchingHoleCards else { return }
         isFetchingHoleCards = true
         let roomID = state.gameID.uuidString
+        let handID = state.handID
         Task { [weak self] in
             guard let self else { return }
-            defer { self.isFetchingHoleCards = false }
+            var shouldRefetch = false
+            defer {
+                self.isFetchingHoleCards = false
+                if shouldRefetch {
+                    self.fetchHeroHoleCards()
+                }
+            }
             do {
                 if let cards = try await supabaseSync.fetchHoleCards(roomID: roomID, playerID: heroID) {
                     if cards.isEmpty {
                         GameLog.holeCardsFetchEmpty(playerID: heroID, state: self.state)
+                    } else if self.state.handID != handID {
+                        shouldRefetch = self.state.phase == .playing && self.state.heroHoleCards.isEmpty
                     } else {
                         self.state.heroHoleCards = cards
                         self.engine.updateHeroDisplay(&self.state)

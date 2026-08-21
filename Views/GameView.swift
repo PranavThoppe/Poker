@@ -83,28 +83,21 @@ private struct PlayerTileView: View {
     var body: some View {
         VStack(spacing: Theme.Spacing.xs) {
             AvatarView(player: player, size: Theme.Size.avatarMD)
-                .overlay {
-                    Circle()
-                        .stroke(
-                            isActiveTurn ? Theme.Color.green : .clear,
-                            lineWidth: 3
-                        )
-                        .padding(-4)
-                }
-                .scaleEffect(isActiveTurn ? 1.08 : 1)
                 .opacity(player.isFolded ? 0.35 : 1.0)
 
             Text(player.name)
                 .font(Theme.Font.playerName)
-                .foregroundStyle(
-                    player.isFolded
-                        ? Theme.Color.secondary
-                        : (isActiveTurn ? Theme.Color.green : Theme.Color.primary)
-                )
+                .foregroundStyle(player.isFolded ? Theme.Color.secondary : Theme.Color.primary)
 
             Text("\(player.stack)")
                 .font(Theme.Font.playerStack)
                 .foregroundStyle(Theme.Color.secondary)
+
+            Image(systemName: "arrowtriangle.up.fill")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(Theme.Color.green)
+                .opacity(isActiveTurn ? 1 : 0)
+                .frame(height: 8)
 
             if player.currentBet > 0 {
                 BetChip(amount: player.currentBet)

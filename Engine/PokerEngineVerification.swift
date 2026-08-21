@@ -10,6 +10,7 @@ enum PokerEngineVerification {
             && bbOptionOnLimp()
             && bettingUIIsLocalToHero()
             && guestDefersHostDealsFlop()
+            && guestKeepsFetchedHoleCards()
             && chipLeaderOnManualEnd()
     }
 
@@ -131,6 +132,26 @@ enum PokerEngineVerification {
         return state.bettingRound == .flop
             && state.board.compactMap({ $0 }).count == 3
             && state.activePlayerID != nil
+    }
+
+    /// Guests store hole cards only in `heroHoleCards`. Display refresh must not wipe them.
+    static func guestKeepsFetchedHoleCards() -> Bool {
+        var state = twoPlayerState()
+        var engine = PokerEngine()
+        engine.startGame(&state)
+        engine.startHand(&state)
+
+        let guestID = "guest"
+        guard let dealt = state.holeCardsByPlayer[guestID], dealt.count == 2 else { return false }
+
+        state.heroID = guestID
+        state.heroHoleCards = dealt
+        state.holeCardsByPlayer = [:]
+
+        engine.updateHeroDisplay(&state)
+        engine.syncBettingUI(&state)
+
+        return state.heroHoleCards == dealt && state.heroHandRank != nil
     }
 
     @MainActor

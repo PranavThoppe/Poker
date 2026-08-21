@@ -426,7 +426,10 @@ struct PokerEngine {
 
     mutating func updateHeroDisplay(_ state: inout GameState) {
         guard let heroID = state.heroID else { return }
-        state.heroHoleCards = state.holeCardsByPlayer[heroID] ?? []
+        // Guests never have `holeCardsByPlayer`; keep cards they fetched into `heroHoleCards`.
+        if let dealt = state.holeCardsByPlayer[heroID], dealt.count == 2 {
+            state.heroHoleCards = dealt
+        }
         let boardCards = state.board.compactMap { $0 }
         guard state.heroHoleCards.count == 2 else {
             state.heroHandRank = nil

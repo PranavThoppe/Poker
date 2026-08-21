@@ -229,6 +229,7 @@ struct HeroRow: View {
     var body: some View {
         HStack(spacing: Theme.Spacing.md) {
             HoleCardsView(cards: holeCards)
+            Spacer(minLength: 0)
             if let hero {
                 HandSummaryCard(player: hero, handRank: handRank)
             }
@@ -241,20 +242,26 @@ struct HeroRow: View {
 struct HoleCardsView: View {
     let cards: [Card]
 
+    /// Horizontal offset so the back card’s center suit stays visible beside the front card.
+    private let spread: CGFloat = 30
+
     var body: some View {
         ZStack {
             if cards.count > 0 {
                 CardView(card: cards[0], width: Theme.Size.holeCardW, height: Theme.Size.holeCardH)
                     .rotationEffect(.degrees(-6))
-                    .offset(x: -14, y: 4)
+                    .offset(x: -spread, y: 4)
             }
             if cards.count > 1 {
                 CardView(card: cards[1], width: Theme.Size.holeCardW, height: Theme.Size.holeCardH)
                     .rotationEffect(.degrees(4))
-                    .offset(x: 14, y: -4)
+                    .offset(x: spread, y: -4)
             }
         }
-        .frame(height: Theme.Size.holeCardH + 16)
+        .frame(
+            width: Theme.Size.holeCardW + spread * 2,
+            height: Theme.Size.holeCardH + 16
+        )
     }
 }
 
@@ -280,7 +287,7 @@ struct HandSummaryCard: View {
                 .font(Theme.Font.heroStack)
                 .foregroundStyle(Theme.Color.primary)
         }
-        .frame(maxWidth: .infinity)
+        .padding(.horizontal, Theme.Spacing.lg)
         .padding(.vertical, Theme.Spacing.md)
         .background(Theme.Color.surface)
         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.tile))

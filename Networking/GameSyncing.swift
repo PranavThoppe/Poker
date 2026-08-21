@@ -5,7 +5,10 @@ import Foundation
 protocol GameSyncing: AnyObject {
     /// Subscribe to state changes from remote players.
     /// The closure is called on the main actor whenever a new state arrives.
-    func subscribe(roomID: String, onUpdate: @escaping @MainActor (GameState) -> Void)
+    func subscribe(
+        roomID: String,
+        onUpdate: @escaping @MainActor (GameState, String?) -> Void
+    )
 
     /// Publish a local state change to all other participants.
     func publish(state: GameState, roomID: String)
@@ -78,7 +81,10 @@ private extension GamePhase {
 // MARK: - No-op mock
 
 final class MockSync: GameSyncing {
-    func subscribe(roomID: String, onUpdate: @escaping @MainActor (GameState) -> Void) {}
+    func subscribe(
+        roomID: String,
+        onUpdate: @escaping @MainActor (GameState, String?) -> Void
+    ) {}
     func publish(state: GameState, roomID: String) {}
     func unsubscribe(roomID: String) {}
 }

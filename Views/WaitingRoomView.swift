@@ -69,7 +69,7 @@ struct WaitingRoomView: View {
     private var bottomBar: some View {
         VStack(spacing: Theme.Spacing.md) {
             readyButton
-            if store.allReady {
+            if store.canStartGame {
                 startButton
             }
             Spacer().frame(height: Theme.Spacing.lg)

@@ -28,6 +28,20 @@ struct SupabaseClient {
         return try decoder.decode(T.self, from: data)
     }
 
+    // MARK: - RPC
+
+    func rpc(_ function: String, body: some Encodable) async throws {
+        guard let url = URL(string: SupabaseConstants.projectURL + "/rest/v1/rpc/" + function) else {
+            throw URLError(.badURL)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        applyHeaders(to: &request, contentType: true)
+        request.httpBody = try encoder.encode(body)
+        let (_, response) = try await session.data(for: request)
+        try validate(response)
+    }
+
     // MARK: - POST / Upsert
 
     /// POSTs a JSON body with `Prefer: resolution=merge-duplicates` — upserts on conflict.

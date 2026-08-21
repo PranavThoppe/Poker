@@ -8,6 +8,8 @@ enum PokerEngineVerification {
         preflopFirstActorIsUTG()
             && blindsNotInActedInitially()
             && bbOptionOnLimp()
+            && bettingUIIsLocalToHero()
+            && guestDefersHostDealsFlop()
             && chipLeaderOnManualEnd()
     }
 
@@ -71,6 +73,66 @@ enum PokerEngineVerification {
         return canRaise || canCheck
     }
 
+    static func bettingUIIsLocalToHero() -> Bool {
+        var state = twoPlayerState()
+        var engine = PokerEngine()
+        engine.startGame(&state)
+        engine.startHand(&state)
+
+        guard let firstID = state.activePlayerID,
+              let bigBlindID = state.players.first(where: { $0.currentBet == PokerEngine.bigBlind })?.id
+        else { return false }
+
+        state.heroID = firstID
+        engine.syncBettingUI(&state)
+        guard state.callAmount == PokerEngine.smallBlind else { return false }
+
+        state.heroID = bigBlindID
+        engine.syncBettingUI(&state)
+        return state.callAmount == 0
+    }
+
+    static func guestDefersHostDealsFlop() -> Bool {
+        var state = twoPlayerState()
+        var engine = PokerEngine()
+        engine.startGame(&state)
+        engine.startHand(&state)
+
+        let hostDeck = state.remainingDeck
+        guard let guestID = state.activePlayerID,
+              let hostID = state.players.first(where: { $0.id != guestID })?.id,
+              engine.applyAction(
+                &state,
+                playerID: guestID,
+                action: .call(amount: PokerEngine.smallBlind),
+                canResolveBettingRound: false
+              ),
+              engine.applyAction(
+                &state,
+                playerID: hostID,
+                action: .raise(amount: 20)
+              )
+        else { return false }
+
+        state.remainingDeck = []
+        guard engine.applyAction(
+            &state,
+            playerID: guestID,
+            action: .call(amount: 10),
+            canResolveBettingRound: false
+        ) else { return false }
+
+        guard state.activePlayerID == nil,
+              state.bettingRound == .preFlop,
+              state.board.compactMap({ $0 }).isEmpty else { return false }
+
+        state.remainingDeck = hostDeck
+        guard engine.resolvePendingBettingRound(&state) else { return false }
+        return state.bettingRound == .flop
+            && state.board.compactMap({ $0 }).count == 3
+            && state.activePlayerID != nil
+    }
+
     @MainActor
     static func chipLeaderOnManualEnd() -> Bool {
         let store = GameStore()
@@ -103,6 +165,17 @@ enum PokerEngineVerification {
         for i in state.players.indices {
             state.players[i].isDealer = i == dealerIndex
         }
+        return state
+    }
+
+    private static func twoPlayerState() -> GameState {
+        var state = GameState()
+        state.phase = .playing
+        state.players = [
+            Player(id: "host", name: "Host", stack: 500, avatarIndex: 0),
+            Player(id: "guest", name: "Guest", stack: 500, avatarIndex: 1),
+        ]
+        state.players[0].isDealer = true
         return state
     }
 

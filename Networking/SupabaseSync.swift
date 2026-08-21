@@ -7,32 +7,39 @@ import Foundation
 ///   Change detection uses `updated_at`; `onUpdate` is only called when it differs.
 /// - `publish` upserts game_rooms with a sanitised public state (no private card data).
 /// - Hole cards are written/read separately through `player_hole_cards`.
+/// - Poll queries exclude `debug_log` so the growing log is not downloaded every 2 s.
 final class SupabaseSync: GameSyncing {
 
     private var pollTask: Task<Void, Never>?
+    private static let pollSelect = "id,host_id,public_state,updated_at"
 
     deinit { pollTask?.cancel() }
 
     // MARK: - GameSyncing
 
-    func subscribe(roomID: String, onUpdate: @escaping @MainActor (GameState) -> Void) {
+    func subscribe(
+        roomID: String,
+        onUpdate: @escaping @MainActor (GameState, String?) -> Void
+    ) {
         pollTask?.cancel()
+        GameLog.subscriptionStarted(roomID: roomID)
         pollTask = Task { [weak self] in
             guard self != nil else { return }
-            // `lastSeenUpdatedAt` lives entirely inside this Task — no shared mutable state.
             var lastSeenUpdatedAt: String? = nil
 
             func fetchOnce() async {
                 do {
                     let rows: [GameRoomRow] = try await SupabaseClient.shared.get(
                         path: "game_rooms",
-                        query: ["id": "eq.\(roomID)", "select": "*"]
+                        query: ["id": "eq.\(roomID)", "select": Self.pollSelect]
                     )
                     guard let row = rows.first else { return }
-                    // Only notify when something actually changed.
                     guard row.updatedAt != lastSeenUpdatedAt else { return }
                     lastSeenUpdatedAt = row.updatedAt
-                    await onUpdate(row.publicState)
+                    await MainActor.run {
+                        GameLog.remoteStateReceived(state: row.publicState)
+                    }
+                    await onUpdate(row.publicState, row.hostID)
                 } catch {
                     // Transient errors (network, extension suspended) are expected — ignore silently.
                 }
@@ -48,12 +55,25 @@ final class SupabaseSync: GameSyncing {
     }
 
     func publish(state: GameState, roomID: String) {
-        Task { try? await Self.publishRoom(state: state, roomID: roomID) }
+        GameLog.statePublishStarted(state: state)
+        Task {
+            do {
+                try await Self.publishRoom(state: state, roomID: roomID)
+                await MainActor.run {
+                    GameLog.statePublishSucceeded(state: state)
+                }
+            } catch {
+                await MainActor.run {
+                    GameLog.statePublishFailed(state: state)
+                }
+            }
+        }
     }
 
     func unsubscribe(roomID: String) {
         pollTask?.cancel()
         pollTask = nil
+        GameLog.subscriptionStopped(roomID: roomID)
     }
 
     // MARK: - Hole cards (called directly by GameStore)
@@ -88,13 +108,12 @@ final class SupabaseSync: GameSyncing {
     // MARK: - Private
 
     private static func publishRoom(state: GameState, roomID: String) async throws {
-        // Strip all private / per-client fields before writing to the shared row.
         var pub = state
         pub.holeCardsByPlayer = [:]
         pub.remainingDeck     = []
         pub.heroHoleCards     = []
         pub.heroHandRank      = nil
-        pub.heroID            = nil   // Each client tracks their own hero locally.
+        pub.heroID            = nil
 
         struct Payload: Encodable {
             let id: String
@@ -109,7 +128,7 @@ final class SupabaseSync: GameSyncing {
             id:           roomID,
             game_mode:    state.gameMode.rawValue,
             phase:        state.phase.supabaseValue,
-            host_id:      ProfileService.deviceID,
+            host_id:      state.hostID ?? ProfileService.deviceID,
             public_state: pub,
             updated_at:   ISO8601DateFormatter().string(from: Date())
         )
@@ -121,11 +140,13 @@ final class SupabaseSync: GameSyncing {
 
 private struct GameRoomRow: Decodable {
     let id: String
+    let hostID: String?
     let publicState: GameState
     let updatedAt: String
 
     enum CodingKeys: String, CodingKey {
         case id
+        case hostID = "host_id"
         case publicState = "public_state"
         case updatedAt   = "updated_at"
     }

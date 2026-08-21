@@ -12,7 +12,10 @@ struct GameView: View {
             VStack(spacing: 0) {
                 Spacer().frame(height: Theme.Spacing.lg)
 
-                PlayersStripView(players: store.state.players)
+                PlayersStripView(
+                    players: store.state.players,
+                    activePlayerID: store.state.activePlayerID
+                )
 
                 Spacer()
 
@@ -56,12 +59,16 @@ struct GameView: View {
 
 struct PlayersStripView: View {
     let players: [Player]
+    let activePlayerID: String?
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(alignment: .top, spacing: Theme.Spacing.lg) {
                 ForEach(players) { player in
-                    PlayerTileView(player: player)
+                    PlayerTileView(
+                        player: player,
+                        isActiveTurn: player.id == activePlayerID
+                    )
                 }
             }
             .padding(.horizontal, Theme.Spacing.md)
@@ -71,15 +78,29 @@ struct PlayersStripView: View {
 
 private struct PlayerTileView: View {
     let player: Player
+    let isActiveTurn: Bool
 
     var body: some View {
         VStack(spacing: Theme.Spacing.xs) {
             AvatarView(player: player, size: Theme.Size.avatarMD)
+                .overlay {
+                    Circle()
+                        .stroke(
+                            isActiveTurn ? Theme.Color.green : .clear,
+                            lineWidth: 3
+                        )
+                        .padding(-4)
+                }
+                .scaleEffect(isActiveTurn ? 1.08 : 1)
                 .opacity(player.isFolded ? 0.35 : 1.0)
 
             Text(player.name)
                 .font(Theme.Font.playerName)
-                .foregroundStyle(player.isFolded ? Theme.Color.secondary : Theme.Color.primary)
+                .foregroundStyle(
+                    player.isFolded
+                        ? Theme.Color.secondary
+                        : (isActiveTurn ? Theme.Color.green : Theme.Color.primary)
+                )
 
             Text("\(player.stack)")
                 .font(Theme.Font.playerStack)
@@ -92,6 +113,7 @@ private struct PlayerTileView: View {
             }
         }
         .frame(width: 56)
+        .animation(.easeInOut(duration: 0.2), value: isActiveTurn)
     }
 }
 

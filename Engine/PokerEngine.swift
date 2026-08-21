@@ -35,6 +35,7 @@ struct PokerEngine {
         }
 
         state.board = Array(repeating: nil, count: 5)
+        state.handID = UUID()
         state.pot = 0
         state.holeCardsByPlayer = [:]
         state.streetBetLevel = 0
@@ -65,7 +66,12 @@ struct PokerEngine {
     // MARK: - Actions
 
     @discardableResult
-    mutating func applyAction(_ state: inout GameState, playerID: String, action: BettingAction) -> Bool {
+    mutating func applyAction(
+        _ state: inout GameState,
+        playerID: String,
+        action: BettingAction,
+        canResolveBettingRound: Bool = true
+    ) -> Bool {
         guard state.activePlayerID == playerID,
               let idx = state.players.firstIndex(where: { $0.id == playerID }),
               !state.players[idx].isFolded,
@@ -110,10 +116,10 @@ struct PokerEngine {
         }
 
         if isBettingRoundComplete(&state) {
-            if state.bettingRound == .river {
-                resolveShowdown(&state)
+            if canResolveBettingRound {
+                resolveCompletedBettingRound(&state)
             } else {
-                advanceStreet(&state)
+                state.activePlayerID = nil
             }
         } else {
             advanceToNextPlayer(&state)
@@ -149,6 +155,20 @@ struct PokerEngine {
         }
 
         return actions
+    }
+
+    /// Resolves a betting round that a guest completed without access to the host-owned deck.
+    /// Returns `true` only when the state represented a complete, pending round.
+    @discardableResult
+    mutating func resolvePendingBettingRound(_ state: inout GameState) -> Bool {
+        guard state.activePlayerID == nil,
+              state.lastHandWinnerID == nil,
+              isBettingRoundComplete(&state) else { return false }
+
+        resolveCompletedBettingRound(&state)
+        syncBettingUI(&state)
+        updateHeroDisplay(&state)
+        return true
     }
 
     func shouldEndGame(_ state: GameState) -> Bool {
@@ -348,6 +368,14 @@ struct PokerEngine {
 
     private mutating func resetActed(_ state: inout GameState, except playerID: String) {
         state.actedThisStreet = [playerID]
+    }
+
+    private mutating func resolveCompletedBettingRound(_ state: inout GameState) {
+        if state.bettingRound == .river {
+            resolveShowdown(&state)
+        } else {
+            advanceStreet(&state)
+        }
     }
 
     private mutating func advanceStreet(_ state: inout GameState) {

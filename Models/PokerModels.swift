@@ -118,6 +118,10 @@ struct PlayerStats: Identifiable, Codable {
 struct GameState: Codable {
     /// Stable session identifier for this game; encoded in the iMessage bubble URL.
     var gameID: UUID = UUID()
+    /// Stable device ID of the room creator. Public metadata, never a display name.
+    var hostID: String? = nil
+    /// Changes for every hand so clients can discard private cards from the previous deal.
+    var handID: UUID? = nil
     var gameMode: GameMode = .classicPoker
     var phase: GamePhase = .waiting
     var players: [Player] = []

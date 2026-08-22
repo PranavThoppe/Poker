@@ -208,7 +208,6 @@ struct ActionBarView: View {
                 }
                 RaiseSplitButton(
                     amount: selectedAmount,
-                    isExpanded: showRaiseCustomization,
                     isEnabled: raiseEnabled,
                     onRaise: {
                         showRaiseCustomization = false
@@ -262,7 +261,6 @@ struct ActionBarView: View {
 
 private struct RaiseSplitButton: View {
     let amount: Int
-    let isExpanded: Bool
     let isEnabled: Bool
     let onRaise: () -> Void
     let onCustomize: () -> Void
@@ -284,7 +282,7 @@ private struct RaiseSplitButton: View {
                 .frame(width: 1, height: 24)
 
             Button(action: onCustomize) {
-                Image(systemName: isExpanded ? "chevron.down" : "chevron.up")
+                Image(systemName: "plus")
                     .font(.system(size: 12, weight: .bold))
                     .foregroundStyle(isEnabled ? Theme.Color.primary : Theme.Color.secondary)
                     .frame(width: 38, height: Theme.Size.actionPillH)
@@ -415,11 +413,20 @@ struct HeroRow: View {
 
 private struct HeroSideButtons: View {
     private let buttonSize: CGFloat = 44
+    @State private var showHandRankings = false
 
     var body: some View {
         VStack(spacing: Theme.Spacing.sm) {
             sideButton(systemName: "bubble.left.fill") {}
-            sideButton(systemName: "info.circle.fill") {}
+            sideButton(systemName: "info.circle.fill") {
+                showHandRankings = true
+            }
+        }
+        .sheet(isPresented: $showHandRankings) {
+            HandRankingsView()
+                .presentationDetents([.height(320)])
+                .presentationDragIndicator(.hidden)
+                .presentationContentInteraction(.scrolls)
         }
     }
 

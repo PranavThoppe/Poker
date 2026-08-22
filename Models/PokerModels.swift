@@ -79,15 +79,15 @@ enum BettingAction: Codable {
 
 // MARK: - Hand summary
 
-enum HandRank: String, Codable {
+enum HandRank: String, Codable, CaseIterable {
     case highCard = "High Card"
     case pair = "Pair"
-    case twoPair = "Two Pair"
-    case threeOfAKind = "Three of a Kind"
+    case twoPair = "2 Pair"
+    case threeOfAKind = "3 of a Kind"
     case straight = "Straight"
     case flush = "Flush"
     case fullHouse = "Full House"
-    case fourOfAKind = "Four of a Kind"
+    case fourOfAKind = "4 of a Kind"
     case straightFlush = "Straight Flush"
     case royalFlush = "Royal Flush"
 }

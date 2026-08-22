@@ -229,10 +229,36 @@ struct HeroRow: View {
     var body: some View {
         HStack(spacing: Theme.Spacing.md) {
             HoleCardsView(cards: holeCards)
-            Spacer(minLength: 0)
             if let hero {
                 HandSummaryCard(player: hero, handRank: handRank)
+                    .padding(.leading, 15)
             }
+            Spacer(minLength: 0)
+            HeroSideButtons()
+        }
+    }
+}
+
+// MARK: - Side buttons (chat + info)
+
+private struct HeroSideButtons: View {
+    private let buttonSize: CGFloat = 44
+
+    var body: some View {
+        VStack(spacing: Theme.Spacing.sm) {
+            sideButton(systemName: "bubble.left.fill") {}
+            sideButton(systemName: "info.circle.fill") {}
+        }
+    }
+
+    private func sideButton(systemName: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(Theme.Color.primary)
+                .frame(width: buttonSize, height: buttonSize)
+                .background(Theme.Color.surface)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.pill))
         }
     }
 }
@@ -273,13 +299,7 @@ struct HandSummaryCard: View {
 
     var body: some View {
         VStack(spacing: Theme.Spacing.xs) {
-            if let rank = handRank {
-                Text(rank.rawValue)
-                    .font(Theme.Font.handRank)
-                    .foregroundStyle(Theme.Color.secondary)
-                    .textCase(.uppercase)
-                    .tracking(0.5)
-            }
+            rankLabel
 
             AvatarView(player: player, size: Theme.Size.avatarMD)
 
@@ -291,6 +311,26 @@ struct HandSummaryCard: View {
         .padding(.vertical, Theme.Spacing.md)
         .background(Theme.Color.surface)
         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.tile))
+    }
+
+    /// Sized to the widest rank label so the tile width stays stable across hands.
+    private var rankLabel: some View {
+        ZStack {
+            ForEach(HandRank.allCases, id: \.self) { rank in
+                Text(rank.rawValue)
+                    .font(Theme.Font.handRank)
+                    .textCase(.uppercase)
+                    .tracking(0.5)
+                    .hidden()
+            }
+
+            Text(handRank?.rawValue ?? "")
+                .font(Theme.Font.handRank)
+                .foregroundStyle(Theme.Color.secondary)
+                .textCase(.uppercase)
+                .tracking(0.5)
+                .opacity(handRank == nil ? 0 : 1)
+        }
     }
 }
 

@@ -5,6 +5,20 @@ import SwiftUI
 struct GameView: View {
     @EnvironmentObject var store: GameStore
 
+    private var hero: Player? {
+        guard let heroID = store.state.heroID else { return nil }
+        return store.state.players.first { $0.id == heroID }
+    }
+
+    private var maximumRaiseAmount: Int {
+        guard let hero else { return store.state.raiseAmount }
+        return hero.currentBet + hero.stack
+    }
+
+    private var canRaise: Bool {
+        maximumRaiseAmount > store.state.streetBetLevel
+    }
+
     var body: some View {
         ZStack {
             Theme.Color.background.ignoresSafeArea()
@@ -30,10 +44,13 @@ struct GameView: View {
                 ActionBarView(
                     callAmount: store.state.callAmount,
                     raiseAmount: store.state.raiseAmount,
+                    maximumRaiseAmount: maximumRaiseAmount,
+                    raiseIncrement: PokerEngine.smallBlind,
+                    canRaise: canRaise,
                     isHeroTurn: store.isHeroTurn,
                     onCheck: { store.check() },
                     onCall: { store.call() },
-                    onRaise: { store.raise(store.state.raiseAmount) },
+                    onRaise: { store.raise($0) },
                     onFold: { store.fold() },
                     onFinishGame: { store.endGame() }
                 )
@@ -150,28 +167,78 @@ struct BoardView: View {
 struct ActionBarView: View {
     let callAmount: Int
     let raiseAmount: Int
+    let maximumRaiseAmount: Int
+    let raiseIncrement: Int
+    let canRaise: Bool
     let isHeroTurn: Bool
     let onCheck: () -> Void
     let onCall: () -> Void
-    let onRaise: () -> Void
+    let onRaise: (Int) -> Void
     let onFold: () -> Void
     let onFinishGame: () -> Void
 
     @State private var showOptions = false
+    @State private var showRaiseCustomization = false
+    @State private var selectedRaiseAmount = 0
 
     private var actionsEnabled: Bool { isHeroTurn }
+    private var raiseEnabled: Bool { actionsEnabled && canRaise }
+
+    private var selectedAmount: Int {
+        min(max(selectedRaiseAmount, raiseAmount), maximumRaiseAmount)
+    }
 
     var body: some View {
-        HStack(spacing: Theme.Spacing.sm) {
-            if callAmount == 0 {
-                ActionPill(label: "Check", action: onCheck, isEnabled: actionsEnabled)
-            } else {
-                ActionPill(label: "Call \(callAmount)", action: onCall, isEnabled: actionsEnabled)
+        VStack(spacing: Theme.Spacing.sm) {
+            if showRaiseCustomization {
+                RaiseCustomizationView(
+                    amount: $selectedRaiseAmount,
+                    minimumAmount: raiseAmount,
+                    maximumAmount: maximumRaiseAmount,
+                    increment: raiseIncrement
+                )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            ActionPill(label: "Raise \(raiseAmount)", action: onRaise, isEnabled: actionsEnabled)
-            moreButton
+
+            HStack(spacing: Theme.Spacing.sm) {
+                if callAmount == 0 {
+                    ActionPill(label: "Check", action: onCheck, isEnabled: actionsEnabled)
+                } else {
+                    ActionPill(label: "Call \(callAmount)", action: onCall, isEnabled: actionsEnabled)
+                }
+                RaiseSplitButton(
+                    amount: selectedAmount,
+                    isExpanded: showRaiseCustomization,
+                    isEnabled: raiseEnabled,
+                    onRaise: {
+                        showRaiseCustomization = false
+                        onRaise(selectedAmount)
+                    },
+                    onCustomize: {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showRaiseCustomization.toggle()
+                        }
+                    }
+                )
+                moreButton
+            }
+            .frame(height: Theme.Size.actionPillH)
         }
-        .frame(height: Theme.Size.actionPillH)
+        .onAppear {
+            selectedRaiseAmount = raiseAmount
+        }
+        .onChange(of: raiseAmount) { newValue in
+            selectedRaiseAmount = newValue
+            showRaiseCustomization = false
+        }
+        .onChange(of: maximumRaiseAmount) { newValue in
+            selectedRaiseAmount = min(selectedAmount, newValue)
+        }
+        .onChange(of: isHeroTurn) { newValue in
+            if !newValue {
+                showRaiseCustomization = false
+            }
+        }
     }
 
     private var moreButton: some View {
@@ -190,6 +257,111 @@ struct ActionBarView: View {
             Button("Finish game (test)") { onFinishGame() }
             Button("Cancel", role: .cancel) {}
         }
+    }
+}
+
+private struct RaiseSplitButton: View {
+    let amount: Int
+    let isExpanded: Bool
+    let isEnabled: Bool
+    let onRaise: () -> Void
+    let onCustomize: () -> Void
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Button(action: onRaise) {
+                Text("Raise to \(amount)")
+                    .font(Theme.Font.actionLabel)
+                    .foregroundStyle(isEnabled ? Theme.Color.primary : Theme.Color.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: Theme.Size.actionPillH)
+            }
+
+            Rectangle()
+                .fill(Theme.Color.background.opacity(0.8))
+                .frame(width: 1, height: 24)
+
+            Button(action: onCustomize) {
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.up")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(isEnabled ? Theme.Color.primary : Theme.Color.secondary)
+                    .frame(width: 38, height: Theme.Size.actionPillH)
+            }
+        }
+        .background(Theme.Color.surface)
+        .clipShape(Capsule())
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.4)
+    }
+}
+
+private struct RaiseCustomizationView: View {
+    @Binding var amount: Int
+    let minimumAmount: Int
+    let maximumAmount: Int
+    let increment: Int
+
+    private var canDecrease: Bool { amount > minimumAmount }
+    private var canIncrease: Bool { amount < maximumAmount }
+
+    var body: some View {
+        HStack(spacing: Theme.Spacing.sm) {
+            presetButton("Min") {
+                amount = minimumAmount
+            }
+
+            adjustmentButton(systemName: "minus", isEnabled: canDecrease) {
+                amount = max(minimumAmount, amount - increment)
+            }
+
+            Text("\(amount)")
+                .font(Theme.Font.actionLabel)
+                .foregroundStyle(Theme.Color.primary)
+                .monospacedDigit()
+                .frame(minWidth: 44)
+
+            adjustmentButton(systemName: "plus", isEnabled: canIncrease) {
+                amount = min(maximumAmount, amount + increment)
+            }
+
+            presetButton("All-in") {
+                amount = maximumAmount
+            }
+        }
+        .padding(Theme.Spacing.sm)
+        .background(Theme.Color.surfaceDeep)
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.pill))
+    }
+
+    private func presetButton(_ label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(Theme.Font.caption)
+                .foregroundStyle(Theme.Color.primary)
+                .padding(.horizontal, Theme.Spacing.sm)
+                .frame(height: 34)
+                .background(Theme.Color.surface)
+                .clipShape(Capsule())
+        }
+    }
+
+    private func adjustmentButton(
+        systemName: String,
+        isEnabled: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(isEnabled ? Theme.Color.primary : Theme.Color.secondary)
+                .frame(width: 34, height: 34)
+                .background(Theme.Color.surface)
+                .clipShape(Circle())
+        }
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.45)
     }
 }
 

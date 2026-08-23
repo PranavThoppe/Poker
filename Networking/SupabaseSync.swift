@@ -4,7 +4,9 @@ import Foundation
 ///
 /// Sync model (turn-based, so 2-second polling is sufficient):
 /// - `subscribe` starts a Task loop that GETs the game_rooms row every 2 s.
-///   Change detection uses `updated_at`; `onUpdate` is only called when it differs.
+///   Change detection uses the monotonic `stateVersion` carried inside `public_state`;
+///   older writes are dropped and duplicates are skipped. `updated_at` only breaks ties
+///   between two writes that share a version.
 /// - `publish` upserts game_rooms with a sanitised public state (no private card data).
 /// - Hole cards are written/read separately through `player_hole_cards`.
 /// - Poll queries exclude `debug_log` so the growing log is not downloaded every 2 s.
@@ -25,6 +27,7 @@ final class SupabaseSync: GameSyncing {
         GameLog.subscriptionStarted(roomID: roomID)
         pollTask = Task { [weak self] in
             guard self != nil else { return }
+            var lastSeenVersion: Int? = nil
             var lastSeenUpdatedAt: String? = nil
 
             func fetchOnce() async {
@@ -34,7 +37,14 @@ final class SupabaseSync: GameSyncing {
                         query: ["id": "eq.\(roomID)", "select": Self.pollSelect]
                     )
                     guard let row = rows.first else { return }
-                    guard row.updatedAt != lastSeenUpdatedAt else { return }
+                    let version = row.publicState.version
+                    if let seen = lastSeenVersion {
+                        // Never move backwards, and skip a version we have already merged
+                        // unless a second write landed on it.
+                        if version < seen { return }
+                        if version == seen, row.updatedAt == lastSeenUpdatedAt { return }
+                    }
+                    lastSeenVersion = version
                     lastSeenUpdatedAt = row.updatedAt
                     await MainActor.run {
                         GameLog.remoteStateReceived(state: row.publicState)
@@ -105,7 +115,33 @@ final class SupabaseSync: GameSyncing {
         return rows.first?.cards
     }
 
+    /// Host recovery: re-reads every seat's cards so a relaunched host can still run a showdown.
+    func fetchAllHoleCards(roomID: String) async throws -> [String: [Card]] {
+        struct Row: Decodable {
+            let playerID: String
+            let cards: [Card]
+
+            enum CodingKeys: String, CodingKey {
+                case playerID = "player_id"
+                case cards
+            }
+        }
+        let rows: [Row] = try await SupabaseClient.shared.get(
+            path: "player_hole_cards",
+            query: ["room_id": "eq.\(roomID)", "select": "player_id,cards"]
+        )
+        return Dictionary(rows.map { ($0.playerID, $0.cards) }, uniquingKeysWith: { $1 })
+    }
+
     // MARK: - Private
+
+    /// Millisecond precision. The default formatter emits whole seconds, so two writes in
+    /// the same second produced identical strings and pollers dropped the second one.
+    private static let timestampFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
 
     private static func publishRoom(state: GameState, roomID: String) async throws {
         var pub = state
@@ -130,7 +166,7 @@ final class SupabaseSync: GameSyncing {
             phase:        state.phase.supabaseValue,
             host_id:      state.hostID ?? ProfileService.deviceID,
             public_state: pub,
-            updated_at:   ISO8601DateFormatter().string(from: Date())
+            updated_at:   timestampFormatter.string(from: Date())
         )
         try await SupabaseClient.shared.upsert(path: "game_rooms", body: payload)
     }

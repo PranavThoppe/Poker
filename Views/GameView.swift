@@ -179,20 +179,29 @@ struct ActionBarView: View {
 
     @State private var showOptions = false
     @State private var showRaiseCustomization = false
-    @State private var selectedRaiseAmount = 0
+    /// `nil` means use the engine's current min-raise; set only while customizing this decision.
+    @State private var raiseOverride: Int?
 
     private var actionsEnabled: Bool { isHeroTurn }
     private var raiseEnabled: Bool { actionsEnabled && canRaise }
 
     private var selectedAmount: Int {
-        min(max(selectedRaiseAmount, raiseAmount), maximumRaiseAmount)
+        guard let raiseOverride else { return raiseAmount }
+        return min(max(raiseOverride, raiseAmount), maximumRaiseAmount)
+    }
+
+    private var raiseAmountBinding: Binding<Int> {
+        Binding(
+            get: { selectedAmount },
+            set: { raiseOverride = $0 }
+        )
     }
 
     var body: some View {
         VStack(spacing: Theme.Spacing.sm) {
             if showRaiseCustomization {
                 RaiseCustomizationView(
-                    amount: $selectedRaiseAmount,
+                    amount: raiseAmountBinding,
                     minimumAmount: raiseAmount,
                     maximumAmount: maximumRaiseAmount,
                     increment: raiseIncrement
@@ -210,8 +219,10 @@ struct ActionBarView: View {
                     amount: selectedAmount,
                     isEnabled: raiseEnabled,
                     onRaise: {
+                        let amount = selectedAmount
                         showRaiseCustomization = false
-                        onRaise(selectedAmount)
+                        raiseOverride = nil
+                        onRaise(amount)
                     },
                     onCustomize: {
                         withAnimation(.easeInOut(duration: 0.2)) {
@@ -223,18 +234,13 @@ struct ActionBarView: View {
             }
             .frame(height: Theme.Size.actionPillH)
         }
-        .onAppear {
-            selectedRaiseAmount = raiseAmount
-        }
-        .onChange(of: raiseAmount) { newValue in
-            selectedRaiseAmount = newValue
+        .onChange(of: raiseAmount) { _ in
             showRaiseCustomization = false
         }
-        .onChange(of: maximumRaiseAmount) { newValue in
-            selectedRaiseAmount = min(selectedAmount, newValue)
-        }
         .onChange(of: isHeroTurn) { newValue in
-            if !newValue {
+            if newValue {
+                raiseOverride = nil
+            } else {
                 showRaiseCustomization = false
             }
         }

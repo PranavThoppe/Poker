@@ -8,6 +8,11 @@ enum PokerEngineVerification {
         preflopFirstActorIsUTG()
             && blindsNotInActedInitially()
             && bbOptionOnLimp()
+            && headsUpButtonPostsSmallBlind()
+            && shortStackCanCallAllIn()
+            && allInPlayerIsNotAskedToAct()
+            && streetsDealtWithoutStoredDeck()
+            && stalledHandIsRecoverable()
             && bettingUIIsLocalToHero()
             && guestDefersHostDealsFlop()
             && guestKeepsFetchedHoleCards()
@@ -21,10 +26,9 @@ enum PokerEngineVerification {
         engine.startGame(&state)
         engine.startHand(&state)
 
-        guard let sbIdx = seatAfter(state, from: 0),
-              let bbIdx = seatAfter(state, from: sbIdx),
-              let utgIdx = seatAfter(state, from: bbIdx) else { return false }
-        let bbID = state.players[bbIdx].id
+        guard let seats = blindSeats(state),
+              let utgIdx = seatAfter(state, from: seats.bigBlind) else { return false }
+        let bbID = state.players[seats.bigBlind].id
         let utgID = state.players[utgIdx].id
         return state.activePlayerID == utgID && state.activePlayerID != bbID
     }
@@ -44,9 +48,8 @@ enum PokerEngineVerification {
         engine.startGame(&state)
         engine.startHand(&state)
 
-        guard let sbIdx = seatAfter(state, from: 0),
-              let bbIdx = seatAfter(state, from: sbIdx) else { return false }
-        let bbID = state.players[bbIdx].id
+        guard let seats = blindSeats(state) else { return false }
+        let bbID = state.players[seats.bigBlind].id
 
         var safety = 0
         while state.bettingRound == .preFlop, state.activePlayerID != bbID, safety < 20 {
@@ -72,6 +75,102 @@ enum PokerEngineVerification {
         }
         let canCheck = bbLegal.contains(where: { if case .check = $0 { return true }; return false })
         return canRaise || canCheck
+    }
+
+    /// Heads-up the button posts the small blind and opens the preflop action.
+    static func headsUpButtonPostsSmallBlind() -> Bool {
+        var state = twoPlayerState()
+        var engine = PokerEngine()
+        engine.startGame(&state)
+        engine.startHand(&state)
+
+        guard let button = state.players.first(where: { $0.isDealer }),
+              let other = state.players.first(where: { !$0.isDealer }) else { return false }
+        return button.currentBet == PokerEngine.smallBlind
+            && other.currentBet == PokerEngine.bigBlind
+            && state.activePlayerID == button.id
+    }
+
+    /// A stack too short to cover the bet can still call all-in instead of only folding.
+    static func shortStackCanCallAllIn() -> Bool {
+        var state = twoPlayerState()
+        var engine = PokerEngine()
+        engine.startGame(&state)
+        engine.startHand(&state)
+
+        guard let shortID = state.activePlayerID,
+              let shortIdx = state.players.firstIndex(where: { $0.id == shortID }),
+              let otherID = state.players.first(where: { $0.id != shortID })?.id else { return false }
+
+        // Leave the opener too short to cover the raise it is about to face.
+        state.players[shortIdx].stack = 30
+
+        let toCall = state.streetBetLevel - state.players[shortIdx].currentBet
+        guard engine.applyAction(&state, playerID: shortID, action: .call(amount: toCall)),
+              state.activePlayerID == otherID,
+              engine.applyAction(&state, playerID: otherID, action: .raise(amount: 300)),
+              state.activePlayerID == shortID else { return false }
+
+        let legal = engine.legalActions(for: state, playerID: shortID)
+        guard legal.contains(where: { if case .call = $0 { return true }; return false }) else { return false }
+
+        guard engine.applyAction(&state, playerID: shortID, action: .call(amount: state.streetBetLevel)) else { return false }
+        return state.players.first(where: { $0.id == shortID })?.stack == 0
+    }
+
+    /// An opponent's raise must not put an all-in player back on the clock.
+    static func allInPlayerIsNotAskedToAct() -> Bool {
+        var state = GameState()
+        state.phase = .playing
+        state.bettingRound = .flop
+        state.players = [
+            Player(id: "raiser", name: "Raiser", stack: 400, currentBet: 30, avatarIndex: 0),
+            Player(id: "allin",  name: "All-in", stack: 0,   currentBet: 30, avatarIndex: 1),
+            Player(id: "caller", name: "Caller", stack: 400, currentBet: 30, avatarIndex: 2),
+        ]
+        state.players[0].isDealer = true
+        state.streetBetLevel = 30
+        state.lastRaiseSize = PokerEngine.bigBlind
+        state.actedThisStreet = ["raiser", "allin", "caller"]
+        state.activePlayerID = "raiser"
+
+        var engine = PokerEngine()
+        guard engine.applyAction(&state, playerID: "raiser", action: .raise(amount: 80)) else { return false }
+        return state.activePlayerID == "caller" && state.actedThisStreet.contains("allin")
+    }
+
+    /// A host that lost `remainingDeck` must still deal a real board, not silently blank streets.
+    static func streetsDealtWithoutStoredDeck() -> Bool {
+        var state = twoPlayerState()
+        var engine = PokerEngine()
+        engine.startGame(&state)
+        engine.startHand(&state)
+        state.remainingDeck = []
+
+        var safety = 0
+        while state.bettingRound != .flop, safety < 12, let active = state.activePlayerID {
+            safety += 1
+            let toCall = state.streetBetLevel - (state.players.first { $0.id == active }?.currentBet ?? 0)
+            let action: BettingAction = toCall > 0 ? .call(amount: toCall) : .check
+            guard engine.applyAction(&state, playerID: active, action: action) else { return false }
+        }
+        let board = state.board.compactMap { $0 }
+        let hole = state.holeCardsByPlayer.values.flatMap { $0 }
+        return board.count == 3 && !board.contains(where: { hole.contains($0) })
+    }
+
+    /// A dropped sync write leaves nobody on the clock; recovery must hand the action back.
+    static func stalledHandIsRecoverable() -> Bool {
+        var state = twoPlayerState()
+        var engine = PokerEngine()
+        engine.startGame(&state)
+        engine.startHand(&state)
+
+        // Simulate the lost publish: the round is unfinished but the pointer is gone.
+        state.activePlayerID = nil
+        guard engine.recoverStalledHand(&state) else { return false }
+        guard let restored = state.activePlayerID else { return false }
+        return engine.legalActions(for: state, playerID: restored).isEmpty == false
     }
 
     static func bettingUIIsLocalToHero() -> Bool {
@@ -198,6 +297,19 @@ enum PokerEngineVerification {
         ]
         state.players[0].isDealer = true
         return state
+    }
+
+    /// Blind seats read from the *current* button. `startHand` rotates the dealer, so a
+    /// fixture's seeded dealer index is stale by the time the hand is live.
+    private static func blindSeats(_ state: GameState) -> (smallBlind: Int, bigBlind: Int)? {
+        guard let dealer = state.players.firstIndex(where: { $0.isDealer }) else { return nil }
+        if state.players.filter({ !$0.isEliminated }).count == 2 {
+            guard let other = seatAfter(state, from: dealer) else { return nil }
+            return (smallBlind: dealer, bigBlind: other)
+        }
+        guard let sb = seatAfter(state, from: dealer),
+              let bb = seatAfter(state, from: sb) else { return nil }
+        return (smallBlind: sb, bigBlind: bb)
     }
 
     private static func seatAfter(_ state: GameState, from index: Int) -> Int? {

@@ -122,6 +122,9 @@ struct GameState: Codable {
     var hostID: String? = nil
     /// Changes for every hand so clients can discard private cards from the previous deal.
     var handID: UUID? = nil
+    /// Bumped on every publish so clients can reject duplicate or out-of-order remote writes.
+    /// Optional because rows written before this field existed must still decode.
+    var stateVersion: Int? = nil
     var gameMode: GameMode = .classicPoker
     var phase: GamePhase = .waiting
     var players: [Player] = []
@@ -145,4 +148,6 @@ struct GameState: Codable {
     var actedThisStreet: [String] = []
     var lastHandWinnerID: String? = nil
     var lastPotAwarded: Int = 0
+
+    var version: Int { stateVersion ?? 0 }
 }

@@ -59,6 +59,10 @@ struct PokerEngine {
         }
 
         setFirstToAct(&state, preFlop: true)
+        // Blinds put everyone all-in, so there is nothing to bet — deal the board out.
+        if state.activePlayerID == nil, activeCount >= 2 {
+            resolveCompletedBettingRound(&state)
+        }
         syncBettingUI(&state)
         updateHeroDisplay(&state)
     }
@@ -84,8 +88,10 @@ struct PokerEngine {
             guard state.players[idx].currentBet == state.streetBetLevel else { return false }
         case .call(let amount):
             let toCall = state.streetBetLevel - state.players[idx].currentBet
-            guard toCall > 0, amount >= toCall else { return false }
-            postBet(&state, playerIndex: idx, amount: toCall)
+            // A player short of the full amount calls all-in for less.
+            let owed = min(toCall, state.players[idx].stack)
+            guard toCall > 0, owed > 0, amount >= owed else { return false }
+            postBet(&state, playerIndex: idx, amount: owed)
         case .raise(let targetTotal):
             guard targetTotal > state.streetBetLevel else { return false }
             let needed = targetTotal - state.players[idx].currentBet
@@ -144,14 +150,16 @@ struct PokerEngine {
             actions.append(.check)
         }
 
-        if toCall > 0, player.stack >= toCall {
+        // Calling with a short stack is legal; the payment clamps to an all-in.
+        if toCall > 0, player.stack > 0 {
             actions.append(.call(amount: toCall))
         }
 
+        // When the minimum raise is unaffordable, shoving the rest of the stack still is.
+        let maxTotal = player.currentBet + player.stack
         let minRaiseTo = state.streetBetLevel + max(state.lastRaiseSize, Self.bigBlind)
-        let needed = minRaiseTo - player.currentBet
-        if minRaiseTo > state.streetBetLevel, needed > 0, needed <= player.stack {
-            actions.append(.raise(amount: minRaiseTo))
+        if maxTotal > state.streetBetLevel {
+            actions.append(.raise(amount: min(minRaiseTo, maxTotal)))
         }
 
         return actions
@@ -237,16 +245,34 @@ struct PokerEngine {
         state.activePlayerID = nil
     }
 
+    /// Seats posting the blinds. Heads-up the button posts the small blind; otherwise the
+    /// small blind is left of the button and the big blind left of that.
+    private func blindIndices(_ state: GameState) -> (smallBlind: Int, bigBlind: Int)? {
+        let dealer = dealerIndex(state)
+        let activeCount = state.players.filter { !$0.isEliminated }.count
+        guard activeCount >= 2 else { return nil }
+
+        if activeCount == 2 {
+            guard let other = nextActiveIndex(from: dealer, in: state) else { return nil }
+            return (smallBlind: dealer, bigBlind: other)
+        }
+        guard let sb = nextActiveIndex(from: dealer, in: state),
+              let bb = nextActiveIndex(from: sb, in: state) else { return nil }
+        return (smallBlind: sb, bigBlind: bb)
+    }
+
     private mutating func postBlinds(_ state: inout GameState) {
-        guard let sbIdx = nextActiveIndex(from: dealerIndex(state), in: state),
-              let bbIdx = nextActiveIndex(from: sbIdx, in: state) else { return }
+        guard let blinds = blindIndices(state) else { return }
+        let sbIdx = blinds.smallBlind
+        let bbIdx = blinds.bigBlind
 
         postBet(&state, playerIndex: sbIdx, amount: min(Self.smallBlind, state.players[sbIdx].stack))
         postBet(&state, playerIndex: bbIdx, amount: min(Self.bigBlind, state.players[bbIdx].stack))
 
-        state.streetBetLevel = state.players[bbIdx].currentBet
+        state.streetBetLevel = max(state.players[sbIdx].currentBet, state.players[bbIdx].currentBet)
         state.lastRaiseSize = Self.bigBlind
         state.actedThisStreet = []
+        markAllInPlayersActed(&state)
     }
 
     private mutating func postBet(_ state: inout GameState, playerIndex: Int, amount: Int) {
@@ -297,35 +323,50 @@ struct PokerEngine {
         return nil
     }
 
-    private mutating func setFirstToAct(_ state: inout GameState, preFlop: Bool) {
-        let dealer = dealerIndex(state)
-        let startFrom: Int
-        if preFlop, state.players.filter({ !$0.isEliminated }).count >= 2 {
-            if let bb = nextActiveIndex(from: dealer, in: state),
-               let afterBB = nextActiveIndex(from: bb, in: state) {
-                startFrom = afterBB
-            } else {
-                startFrom = dealer
-            }
-        } else if let leftOfDealer = nextActiveIndex(from: dealer, in: state) {
-            startFrom = leftOfDealer
-        } else {
-            startFrom = dealer
+    /// True when the player still has a decision to make: in the hand and holding chips.
+    private func canAct(_ index: Int, _ state: GameState) -> Bool {
+        let player = state.players[index]
+        return !player.isEliminated && !player.isFolded && player.stack > 0
+    }
+
+    /// First seat from `index` that can still act, or nil when everyone left is all-in.
+    /// Exclusive scans never wrap back onto `index`, so the turn cannot return to the
+    /// player who just acted.
+    private func actorIndex(from index: Int, in state: GameState, inclusive: Bool) -> Int? {
+        let count = state.players.count
+        guard count > 0 else { return nil }
+        let offsets = inclusive ? Array(0..<count) : Array(1..<count)
+        for offset in offsets {
+            let i = (index + offset) % count
+            if canAct(i, state) { return i }
         }
-        state.activePlayerID = state.players[startFrom].id
+        return nil
+    }
+
+    private mutating func setFirstToAct(_ state: inout GameState, preFlop: Bool) {
+        let count = state.players.count
+        guard count > 0 else { return }
+        let dealer = dealerIndex(state)
+
+        let startFrom: Int
+        if preFlop, let blinds = blindIndices(state) {
+            // Heads-up the button opens; otherwise UTG, the seat left of the big blind.
+            startFrom = state.players.filter { !$0.isEliminated }.count == 2
+                ? blinds.smallBlind
+                : (blinds.bigBlind + 1) % count
+        } else {
+            // Post-flop the first live seat left of the button opens.
+            startFrom = (dealer + 1) % count
+        }
+
+        state.activePlayerID = actorIndex(from: startFrom, in: state, inclusive: true)
+            .map { state.players[$0].id }
     }
 
     private mutating func advanceToNextPlayer(_ state: inout GameState) {
         guard let current = state.players.firstIndex(where: { $0.id == state.activePlayerID }) else { return }
-        var i = (current + 1) % state.players.count
-        for _ in 0..<state.players.count {
-            if !state.players[i].isEliminated && !state.players[i].isFolded {
-                state.activePlayerID = state.players[i].id
-                return
-            }
-            i = (i + 1) % state.players.count
-        }
-        state.activePlayerID = nil
+        state.activePlayerID = actorIndex(from: current, in: state, inclusive: false)
+            .map { state.players[$0].id }
     }
 
     /// Non-nil when all but one player have folded (multi-player fold-out).
@@ -350,6 +391,9 @@ struct PokerEngine {
             return true
         }
 
+        // Everyone left is all-in, so there is no decision to wait on.
+        if !active.contains(where: { canAct($0, state) }) { return true }
+
         let level = state.streetBetLevel
         for idx in active {
             let p = state.players[idx]
@@ -368,6 +412,17 @@ struct PokerEngine {
 
     private mutating func resetActed(_ state: inout GameState, except playerID: String) {
         state.actedThisStreet = [playerID]
+        markAllInPlayersActed(&state)
+    }
+
+    /// All-in players have no decision left, so a raise must not put them back on the clock.
+    private mutating func markAllInPlayersActed(_ state: inout GameState) {
+        let allInIDs = state.players
+            .filter { !$0.isEliminated && !$0.isFolded && $0.stack == 0 }
+            .map(\.id)
+        for id in allInIDs {
+            markActed(&state, playerID: id)
+        }
     }
 
     private mutating func resolveCompletedBettingRound(_ state: inout GameState) {
@@ -378,8 +433,31 @@ struct PokerEngine {
         }
     }
 
+    /// Rebuilds the deck from cards not already in play. Recovers hands where the host lost
+    /// `remainingDeck` (an extension relaunch wipes it); otherwise the board silently stays
+    /// blank for the rest of the hand while betting continues street by street.
+    private mutating func replenishDeckIfNeeded(_ state: inout GameState, minimumCards: Int) {
+        guard state.remainingDeck.count < minimumCards else { return }
+
+        var inPlay = Set(state.board.compactMap { $0?.id })
+        for cards in state.holeCardsByPlayer.values {
+            inPlay.formUnion(cards.map(\.id))
+        }
+        inPlay.formUnion(state.heroHoleCards.map(\.id))
+
+        var replacement = Deck()
+        var available: [Card] = []
+        while let card = replacement.draw() {
+            if !inPlay.contains(card.id) { available.append(card) }
+        }
+        state.remainingDeck = available
+    }
+
     private mutating func advanceStreet(_ state: inout GameState) {
         clearStreetBets(&state)
+        markAllInPlayersActed(&state)
+        // Burn card plus up to three community cards.
+        replenishDeckIfNeeded(&state, minimumCards: 4)
         var deck = Deck(remainingCards: state.remainingDeck)
 
         switch state.bettingRound {
@@ -406,6 +484,43 @@ struct PokerEngine {
 
         state.remainingDeck = deck.saveRemaining()
         setFirstToAct(&state, preFlop: false)
+
+        // Nobody can act (all remaining players are all-in): run the rest of the board out
+        // rather than leaving the table with no active player.
+        if state.activePlayerID == nil {
+            resolveCompletedBettingRound(&state)
+        }
+    }
+
+    /// Restores a hand whose active player was lost — a dropped sync write or a client that
+    /// was relaunched mid-hand. Resolves the round if it is genuinely complete, otherwise
+    /// hands the action to a player who still owes one so the table can never freeze.
+    @discardableResult
+    mutating func recoverStalledHand(_ state: inout GameState) -> Bool {
+        guard state.activePlayerID == nil, state.lastHandWinnerID == nil else { return false }
+
+        if resolvePendingBettingRound(&state) { return true }
+
+        let count = state.players.count
+        guard count > 0 else { return false }
+        let start = (dealerIndex(state) + 1) % count
+
+        var candidate: Int? = nil
+        for offset in 0..<count {
+            let i = (start + offset) % count
+            guard canAct(i, state) else { continue }
+            if candidate == nil { candidate = i }
+            if !state.actedThisStreet.contains(state.players[i].id) {
+                candidate = i
+                break
+            }
+        }
+        guard let seat = candidate else { return false }
+
+        state.activePlayerID = state.players[seat].id
+        syncBettingUI(&state)
+        updateHeroDisplay(&state)
+        return true
     }
 
     mutating func syncBettingUI(_ state: inout GameState) {

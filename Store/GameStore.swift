@@ -15,7 +15,11 @@ final class GameStore: ObservableObject {
     private var botSessionConfig = BotSessionConfig.default
     private var botStrategy: BotStrategy = makeStrategy(for: .default)
     private var holeCardRetryTask: Task<Void, Never>?
+    private var stalledHandTask: Task<Void, Never>?
     private var isFetchingHoleCards = false
+    private var isRestoringHostHoleCards = false
+    /// Consecutive watchdog ticks with nobody on the clock.
+    private var stalledPollTicks = 0
 
     init(state: GameState = GameState()) {
         self.state = state
@@ -23,6 +27,7 @@ final class GameStore: ObservableObject {
 
     deinit {
         holeCardRetryTask?.cancel()
+        stalledHandTask?.cancel()
     }
 
     /// New waiting-room session; `gameID` is embedded in the iMessage bubble URL.
@@ -196,6 +201,8 @@ final class GameStore: ObservableObject {
                 return np
             }
         fresh.heroID = state.heroID
+        // Keep the counter climbing so peers do not reject the reset as a stale write.
+        fresh.stateVersion = state.version
         state = fresh
         GameLog.phaseChanged(from: previousPhase, to: .waiting, state: state)
         GameLog.gameReset(state: state)
@@ -214,6 +221,14 @@ final class GameStore: ObservableObject {
     /// Call after setting `syncer` and `isHost`, once `state.gameID` is known.
     func subscribeToRoom() {
         configureDebugLogging()
+        startRoomSubscription()
+        startHoleCardRetryLoop()
+        startStalledHandWatchdog()
+    }
+
+    /// (Re)starts the poll loop. Restarting clears the syncer's de-duplication state, so the
+    /// next tick re-merges the server's current row even if we already saw that version.
+    private func startRoomSubscription() {
         let roomID = state.gameID.uuidString
         syncer.subscribe(roomID: roomID) { [weak self] remoteState, remoteHostID in
             guard let self else { return }
@@ -236,14 +251,16 @@ final class GameStore: ObservableObject {
                self.state.activePlayerID == nil {
                 self.resolveHostPendingState()
             }
+
+            self.stalledPollTicks = 0
         }
-        startHoleCardRetryLoop()
     }
 
     /// Fire-and-forget publish of the current state. No-op in practice mode.
     func publishCurrentState() {
         guard state.gameMode == .classicPoker else { return }
         guard state.hostID != nil else { return }
+        state.stateVersion = state.version + 1
         syncer.publish(state: state, roomID: state.gameID.uuidString)
     }
 
@@ -293,7 +310,9 @@ final class GameStore: ObservableObject {
     }
 
     private func finalizeHandIfNeeded(before: GameLog.ActionSnapshot? = nil, fromRemotePoll: Bool = false) {
-        if state.gameMode == .classicPoker && state.holeCardsByPlayer.isEmpty {
+        // Only guests defer. A host missing its card map (relaunched mid-hand) must still
+        // close the hand, or the table sits forever with nobody on the clock.
+        if state.gameMode == .classicPoker && !isHost && state.holeCardsByPlayer.isEmpty {
             GameLog.showdownDeferredToHost(state: state)
             return
         }
@@ -330,7 +349,8 @@ final class GameStore: ObservableObject {
         case .call(let amount):
             let toCall = state.streetBetLevel - player.currentBet
             if toCall <= 0 { return "callNotRequired" }
-            if amount < toCall { return "callTooSmall" }
+            if player.stack <= 0 { return "playerAllIn" }
+            if amount < min(toCall, player.stack) { return "callTooSmall" }
         case .raise(let targetTotal):
             if targetTotal <= state.streetBetLevel { return "raiseNotHigher" }
             let needed = targetTotal - player.currentBet
@@ -431,6 +451,11 @@ final class GameStore: ObservableObject {
         if state.phase == .playing, state.heroHoleCards.isEmpty {
             fetchHeroHoleCards()
         }
+        // Recover before the next street is dealt, so the rebuilt deck knows which cards
+        // are already in players' hands.
+        if isHost, state.phase == .playing, state.holeCardsByPlayer.isEmpty {
+            restoreHostHoleCards()
+        }
     }
 
     private func resolveHostPendingState() {
@@ -445,6 +470,75 @@ final class GameStore: ObservableObject {
             finalizeHandIfNeeded(fromRemotePoll: true)
         }
         publishCurrentState()
+    }
+
+    /// Watches for a table with nobody on the clock. A lost or overwritten publish used to
+    /// leave both devices waiting on each other with no way back, since resolution only ran
+    /// inside the poll callback for the update that went missing.
+    private func startStalledHandWatchdog() {
+        stalledHandTask?.cancel()
+        stalledHandTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(4))
+                guard let self else { return }
+                self.recoverStalledHandIfNeeded()
+            }
+        }
+    }
+
+    private func recoverStalledHandIfNeeded() {
+        guard state.gameMode == .classicPoker, state.phase == .playing else {
+            stalledPollTicks = 0
+            return
+        }
+        if isHost, state.holeCardsByPlayer.isEmpty {
+            restoreHostHoleCards()
+        }
+        guard state.activePlayerID == nil else {
+            stalledPollTicks = 0
+            return
+        }
+        stalledPollTicks += 1
+
+        guard isHost else {
+            // A guest waiting on the host to resolve a round is normal for a poll cycle or
+            // two. Longer means our own write never landed, so re-merge the server's row:
+            // it either hands the turn back or carries the street we missed.
+            guard stalledPollTicks >= 3 else { return }
+            stalledPollTicks = 0
+            GameLog.snapshot(state, event: "guest resync after stalled hand")
+            startRoomSubscription()
+            return
+        }
+
+        if state.lastHandWinnerID != nil {
+            finalizeHandIfNeeded(fromRemotePoll: true)
+            publishCurrentState()
+            return
+        }
+        guard engine.recoverStalledHand(&state) else { return }
+        GameLog.snapshot(state, event: "recovered stalled hand")
+        if state.activePlayerID == nil {
+            finalizeHandIfNeeded(fromRemotePoll: true)
+        }
+        publishCurrentState()
+    }
+
+    /// Re-reads every seat's hole cards so a host that lost them (extension relaunch) can
+    /// still deal the remaining streets and run the showdown.
+    private func restoreHostHoleCards() {
+        guard let supabaseSync = syncer as? SupabaseSync, !isRestoringHostHoleCards else { return }
+        isRestoringHostHoleCards = true
+        let roomID = state.gameID.uuidString
+        Task { [weak self] in
+            guard let self else { return }
+            defer { self.isRestoringHostHoleCards = false }
+            guard let cards = try? await supabaseSync.fetchAllHoleCards(roomID: roomID),
+                  !cards.isEmpty else { return }
+            self.state.holeCardsByPlayer = cards
+            self.engine.updateHeroDisplay(&self.state)
+            GameLog.snapshot(self.state, event: "host hole cards restored")
+        }
     }
 
     private func startHoleCardRetryLoop() {

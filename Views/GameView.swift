@@ -409,7 +409,7 @@ struct HeroRow: View {
     }
 }
 
-// MARK: - Side buttons (chat + info)
+// MARK: - Side buttons (info)
 
 private struct HeroSideButtons: View {
     private let buttonSize: CGFloat = 44
@@ -417,7 +417,6 @@ private struct HeroSideButtons: View {
 
     var body: some View {
         VStack(spacing: Theme.Spacing.sm) {
-            sideButton(systemName: "bubble.left.fill") {}
             sideButton(systemName: "info.circle.fill") {
                 showHandRankings = true
             }

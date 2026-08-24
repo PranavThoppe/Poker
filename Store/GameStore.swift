@@ -137,9 +137,10 @@ final class GameStore: ObservableObject {
 
     var canStartNextHand: Bool {
         state.phase == .handSummary
+            && state.gameMode == .classicPoker
             && !sessionEndsAfterHandSummary
             && allReadyForNextHand
-            && (state.gameMode != .classicPoker || isHost)
+            && isHost
     }
 
     var isHeroTurn: Bool {

@@ -17,6 +17,7 @@ enum PokerEngineVerification {
             && guestDefersHostDealsFlop()
             && guestKeepsFetchedHoleCards()
             && chipLeaderOnManualEnd()
+            && betweenHandReadyGate()
             && PokerEnginePotVerification.runAll()
     }
 
@@ -269,6 +270,41 @@ enum PokerEngineVerification {
         guard let winner = stats.first(where: { $0.isWinner }) else { return false }
         return winner.id == "hero" && winner.finalStack == 520
             && stats.allSatisfy { $0.finalStack > 0 }
+    }
+
+    @MainActor
+    static func betweenHandReadyGate() -> Bool {
+        var state = twoPlayerState()
+        state.gameMode = .classicPoker
+        state.players[0].isReady = true
+        state.players[1].isReady = true
+
+        var engine = PokerEngine()
+        engine.startGame(&state)
+        engine.startHand(&state)
+        state.phase = .playing
+        guard let activeID = state.activePlayerID else { return false }
+        state.heroID = activeID
+
+        let store = GameStore(state: state)
+        store.isHost = true
+        store.fold()
+
+        guard store.state.phase == .handSummary,
+              store.state.players.allSatisfy({ !$0.isReady }),
+              !store.canStartNextHand else { return false }
+
+        store.toggleReady()
+        guard !store.canStartNextHand else { return false }
+
+        guard let otherIndex = store.state.players.firstIndex(where: { $0.id != activeID }) else {
+            return false
+        }
+        store.state.players[otherIndex].isReady = true
+        guard store.canStartNextHand else { return false }
+
+        store.continueAfterHandSummary()
+        return store.state.phase == .playing
     }
 
     // MARK: - Fixtures

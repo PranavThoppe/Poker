@@ -239,11 +239,12 @@ Repeat hands as needed to cover every action.
 | 4 | Inspect the table after the last hand is shown | ☐ | The winner sees Continue with a countdown; every other device waits on the winner's name. |
 | 5 | Winner taps Continue | ☐ | `showdownAdvancedByWinner`; both devices leave `showdown` together. |
 | 6 | Let the winner's countdown expire instead | ☐ | `showdownAutoAdvanced` once; the table still advances if the winner never taps. |
-| 7 | Inspect hand summary | ☐ | Both devices enter `handSummary` with matching statistics. |
-| 8 | Guest attempts to continue | ☐ | No local hand starts; `guestContinueBlocked`. |
-| 9 | Host continues | ☐ | `nextHandStarted`; dealer rotates and new private cards are available. |
-| 10 | Reduce a stack to zero | ☐ | `playerEliminated`; the player is not assigned future turns or cards. |
-| 11 | Leave one player with chips | ☐ | `gameEnded`; both devices show the same final stacks and winner ID. |
+| 7 | Inspect hand summary | ☐ | Both devices enter `handSummary` with matching statistics; every active player shows **Waiting** beside their stats. |
+| 8 | One player taps Ready Up | ☐ | Both devices show that player as **Ready**; the other active players remain **Waiting**. |
+| 9 | Every active player readies up | ☐ | The host sees **Next Hand** only after all non-eliminated players with chips are ready. |
+| 10 | Host taps Next Hand | ☐ | `nextHandStarted`; dealer rotates and new private cards are available. |
+| 11 | Reduce a stack to zero | ☐ | `playerEliminated`; that player shows **Out**, is not required to ready, and receives no future turns or cards. |
+| 12 | Leave one player with chips | ☐ | `gameEnded`; both devices show the same final stacks and winner ID. |
 
 ## Synchronization and recovery test
 

@@ -7,6 +7,12 @@ struct ResultsWinner: Identifiable {
     var subtitle: String = ""
 }
 
+enum PlayerReadyStatus {
+    case ready
+    case waiting
+    case out
+}
+
 struct ResultsScreenView: View {
     let stats: [PlayerStats]
     let winnerLabel: String
@@ -15,6 +21,9 @@ struct ResultsScreenView: View {
     let statsSectionTitle: String
     let buttonTitle: String
     let onButton: () -> Void
+    var secondaryButtonTitle: String? = nil
+    var onSecondaryButton: (() -> Void)? = nil
+    var readyStatusByPlayerID: [String: PlayerReadyStatus] = [:]
     var countdownStartedAt: Date? = nil
     var countdownDuration: TimeInterval = 5
     var buttonFillColor: Color = Theme.Color.primary
@@ -44,7 +53,20 @@ struct ResultsScreenView: View {
 
                 Spacer()
 
-                actionButton
+                VStack(spacing: Theme.Spacing.sm) {
+                    actionButton
+                    if let secondaryButtonTitle, let onSecondaryButton {
+                        Button(action: onSecondaryButton) {
+                            Text(secondaryButtonTitle)
+                                .font(Theme.Font.actionLabel)
+                                .foregroundStyle(Theme.Color.background)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: Theme.Size.actionPillH)
+                                .background(Theme.Color.green)
+                                .clipShape(Capsule())
+                        }
+                    }
+                }
                     .padding(.horizontal, Theme.Spacing.md)
 
                 Spacer().frame(height: Theme.Spacing.xl)
@@ -102,7 +124,10 @@ struct ResultsScreenView: View {
     private var statsList: some View {
         VStack(spacing: Theme.Spacing.xs) {
             ForEach(stats) { stat in
-                StatsRow(stat: stat)
+                StatsRow(
+                    stat: stat,
+                    readyStatus: readyStatusByPlayerID[stat.id]
+                )
             }
         }
         .padding(.horizontal, Theme.Spacing.md)
@@ -150,6 +175,7 @@ struct ResultsScreenView: View {
 
 struct StatsRow: View {
     let stat: PlayerStats
+    var readyStatus: PlayerReadyStatus? = nil
 
     var body: some View {
         let player = Player(
@@ -169,6 +195,10 @@ struct StatsRow: View {
 
             Spacer()
 
+            if let readyStatus {
+                readyPill(readyStatus)
+            }
+
             statColumns(stat)
         }
         .padding(.horizontal, Theme.Spacing.md)
@@ -177,9 +207,38 @@ struct StatsRow: View {
         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.tile))
     }
 
+    private func readyPill(_ status: PlayerReadyStatus) -> some View {
+        let label: String
+        let foreground: Color
+        let background: Color
+
+        switch status {
+        case .ready:
+            label = "Ready"
+            foreground = Theme.Color.green
+            background = Theme.Color.green.opacity(0.15)
+        case .waiting:
+            label = "Waiting"
+            foreground = Theme.Color.secondary
+            background = Theme.Color.surfaceDeep
+        case .out:
+            label = "Out"
+            foreground = Theme.Color.secondary
+            background = Theme.Color.surfaceDeep
+        }
+
+        return Text(label)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(foreground)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(background)
+            .clipShape(Capsule())
+    }
+
     @ViewBuilder
     private func statColumns(_ stat: PlayerStats) -> some View {
-        HStack(spacing: Theme.Spacing.lg) {
+        HStack(spacing: Theme.Spacing.sm) {
             statCell(label: "Won", value: "\(stat.handsWon)")
             statCell(label: "Best", value: "\(stat.biggestPot)")
             statCell(label: "Final", value: "\(stat.finalStack)")

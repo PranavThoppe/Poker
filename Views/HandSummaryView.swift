@@ -3,9 +3,6 @@ import SwiftUI
 struct HandSummaryView: View {
     @EnvironmentObject var store: GameStore
 
-    private static let autoAdvanceSeconds: TimeInterval = 5
-
-    @State private var countdownStartedAt: Date?
     @State private var didContinue = false
 
     private var stats: [PlayerStats] { store.state.endStats }
@@ -38,42 +35,57 @@ struct HandSummaryView: View {
     }
 
     private var buttonTitle: String {
-        store.sessionEndsAfterHandSummary ? "See Final Results" : "Next Hand"
+        if requiresReadyUp {
+            return isHeroReady ? "Cancel" : "Ready Up"
+        }
+        return store.sessionEndsAfterHandSummary ? "See Final Results" : "Next Hand"
     }
 
-    private var handSummaryTaskID: String {
-        let winnersKey = (store.state.handResult?.winnerIDs ?? []).joined(separator: ",")
-        return "\(store.state.handID?.uuidString ?? "")-\(winnersKey)"
+    private var requiresReadyUp: Bool {
+        store.state.gameMode == .classicPoker && !store.sessionEndsAfterHandSummary
+    }
+
+    private var isHeroReady: Bool {
+        guard let heroID = store.state.heroID else { return false }
+        return store.state.players.first(where: { $0.id == heroID })?.isReady ?? false
+    }
+
+    private var readyStatusByPlayerID: [String: PlayerReadyStatus] {
+        guard requiresReadyUp else { return [:] }
+        return Dictionary(uniqueKeysWithValues: store.state.players.map { player in
+            let status: PlayerReadyStatus
+            if player.isEliminated || player.stack <= 0 {
+                status = .out
+            } else {
+                status = player.isReady ? .ready : .waiting
+            }
+            return (player.id, status)
+        })
     }
 
     var body: some View {
-        ResultsScreenView(
+        let canStartNextHand = store.canStartNextHand
+        return ResultsScreenView(
             stats: stats,
             winnerLabel: winners.count > 1 ? "Split Pot" : "Hand Winner",
             winners: winners,
             winnerSubtitle: winnerSubtitle,
             statsSectionTitle: "Leaderboard",
             buttonTitle: buttonTitle,
-            onButton: continueIfNeeded,
-            countdownStartedAt: countdownStartedAt,
-            countdownDuration: Self.autoAdvanceSeconds,
+            onButton: primaryAction,
+            secondaryButtonTitle: canStartNextHand ? "Next Hand" : nil,
+            onSecondaryButton: { continueIfNeeded() },
+            readyStatusByPlayerID: readyStatusByPlayerID,
             buttonFillColor: Theme.Color.green,
             buttonTrackColor: Theme.Color.green.opacity(0.25),
             buttonTextColor: Theme.Color.primary
         )
-        .task(id: handSummaryTaskID) {
-            guard store.state.phase == .handSummary else { return }
-            didContinue = false
-            // Practice waits for a tap; classic keeps the short auto-advance countdown.
-            guard store.state.gameMode != .practiceVsCPU else {
-                countdownStartedAt = nil
-                return
-            }
-            countdownStartedAt = Date()
-            defer { countdownStartedAt = nil }
+    }
 
-            try? await Task.sleep(for: .seconds(Self.autoAdvanceSeconds))
-            guard !Task.isCancelled else { return }
+    private func primaryAction() {
+        if requiresReadyUp {
+            store.toggleReady()
+        } else {
             continueIfNeeded()
         }
     }

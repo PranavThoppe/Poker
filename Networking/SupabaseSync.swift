@@ -150,6 +150,8 @@ final class SupabaseSync: GameSyncing {
         pub.heroHoleCards     = []
         pub.heroHandRank      = nil
         pub.heroID            = nil
+        // `handResult` stays public. `reveals` starts empty and is appended only when
+        // a player shows, so opponents' hole cards are not in the room row mid-hand.
 
         struct Payload: Encodable {
             let id: String
@@ -195,6 +197,7 @@ private extension GamePhase {
         switch self {
         case .waiting:     return "waiting"
         case .playing:     return "playing"
+        case .showdown:    return "showdown"
         case .handSummary: return "handSummary"
         case .ended:       return "ended"
         }

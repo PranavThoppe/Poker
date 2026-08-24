@@ -46,6 +46,36 @@ struct CardBackView: View {
     }
 }
 
+// MARK: - Board flip (back → face)
+
+struct FlippableBoardCard: View {
+    let card: Card
+    var isFaceUp: Bool
+    var width: CGFloat = Theme.Size.cardW
+    var height: CGFloat = Theme.Size.cardH
+
+    var body: some View {
+        ZStack {
+            CardBackView(width: width, height: height)
+                .opacity(isFaceUp ? 0 : 1)
+                .rotation3DEffect(
+                    .degrees(isFaceUp ? 180 : 0),
+                    axis: (x: 0, y: 1, z: 0),
+                    perspective: 0.65
+                )
+
+            CardView(card: card, width: width, height: height)
+                .opacity(isFaceUp ? 1 : 0)
+                .rotation3DEffect(
+                    .degrees(isFaceUp ? 0 : -180),
+                    axis: (x: 0, y: 1, z: 0),
+                    perspective: 0.65
+                )
+        }
+        .frame(width: width, height: height)
+    }
+}
+
 private struct DiagonalStripePattern: Shape {
     func path(in rect: CGRect) -> Path {
         var path = Path()
@@ -77,4 +107,13 @@ private struct DiagonalStripePattern: Shape {
     CardBackView()
         .padding()
         .background(Theme.Color.background)
+}
+
+#Preview("Board Flip") {
+    HStack(spacing: 12) {
+        FlippableBoardCard(card: Card(rank: .ace, suit: .spades), isFaceUp: false)
+        FlippableBoardCard(card: Card(rank: .ace, suit: .spades), isFaceUp: true)
+    }
+    .padding()
+    .background(Theme.Color.background)
 }

@@ -10,8 +10,9 @@ struct EndGameView: View {
         ResultsScreenView(
             stats: stats,
             winnerLabel: "Winner",
-            winnerName: winner?.name ?? "—",
-            winnerAvatarIndex: winner?.avatarIndex ?? 0,
+            winners: winner.map {
+                [ResultsWinner(id: $0.id, name: $0.name, avatarIndex: $0.avatarIndex)]
+            } ?? [],
             winnerSubtitle: "\(winner?.finalStack ?? 0)",
             statsSectionTitle: "Results",
             buttonTitle: "Play Again",

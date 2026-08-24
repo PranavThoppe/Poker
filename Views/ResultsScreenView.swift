@@ -1,10 +1,16 @@
 import SwiftUI
 
+struct ResultsWinner: Identifiable {
+    let id: String
+    let name: String
+    let avatarIndex: Int
+    var subtitle: String = ""
+}
+
 struct ResultsScreenView: View {
     let stats: [PlayerStats]
     let winnerLabel: String
-    let winnerName: String
-    let winnerAvatarIndex: Int
+    let winners: [ResultsWinner]
     let winnerSubtitle: String
     let statsSectionTitle: String
     let buttonTitle: String
@@ -54,22 +60,43 @@ struct ResultsScreenView: View {
                 .textCase(.uppercase)
                 .tracking(1.5)
 
-            let player = Player(
-                id: "winner",
-                name: winnerName,
-                stack: 0,
-                avatarIndex: winnerAvatarIndex
-            )
-            AvatarView(player: player, size: 72)
+            HStack(spacing: Theme.Spacing.md) {
+                ForEach(displayWinners) { winner in
+                    VStack(spacing: Theme.Spacing.xs) {
+                        let player = Player(
+                            id: winner.id,
+                            name: winner.name,
+                            stack: 0,
+                            avatarIndex: winner.avatarIndex
+                        )
+                        AvatarView(player: player, size: winners.count > 1 ? 56 : 72)
 
-            Text(winnerName)
-                .font(Theme.Font.headline)
-                .foregroundStyle(Theme.Color.primary)
+                        Text(winner.name)
+                            .font(winners.count > 1 ? Theme.Font.subhead : Theme.Font.headline)
+                            .foregroundStyle(Theme.Color.primary)
 
-            Text(winnerSubtitle)
-                .font(Theme.Font.subhead)
-                .foregroundStyle(Theme.Color.secondary)
+                        if winners.count > 1, !winner.subtitle.isEmpty {
+                            Text(winner.subtitle)
+                                .font(Theme.Font.caption)
+                                .foregroundStyle(Theme.Color.secondary)
+                        }
+                    }
+                }
+            }
+
+            if winners.count <= 1 {
+                Text(winnerSubtitle)
+                    .font(Theme.Font.subhead)
+                    .foregroundStyle(Theme.Color.secondary)
+            }
         }
+    }
+
+    private var displayWinners: [ResultsWinner] {
+        if winners.isEmpty {
+            return [ResultsWinner(id: "none", name: "—", avatarIndex: 0)]
+        }
+        return winners
     }
 
     private var statsList: some View {

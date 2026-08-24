@@ -63,7 +63,7 @@ private extension GamePhase {
     var urlQueryValue: String {
         switch self {
         case .waiting: return "waiting"
-        case .playing, .handSummary: return "playing"
+        case .playing, .showdown, .handSummary: return "playing"
         case .ended: return "ended"
         }
     }

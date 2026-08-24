@@ -21,7 +21,10 @@ enum SoloFlowVerification {
             guard engine.applyAction(&state, playerID: "solo", action: .check) else { return false }
         }
 
-        guard state.activePlayerID == nil else { return false }
+        guard state.handResult?.wentToShowdown == true else { return false }
+        guard let pending = state.pendingRevealPlayerID else { return false }
+        guard engine.applyShowdownReveal(&state, playerID: pending) else { return false }
+        guard state.pendingRevealPlayerID == nil else { return false }
         guard engine.shouldEndGame(state) else { return false }
         return true
     }

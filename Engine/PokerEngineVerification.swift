@@ -17,6 +17,7 @@ enum PokerEngineVerification {
             && guestDefersHostDealsFlop()
             && guestKeepsFetchedHoleCards()
             && chipLeaderOnManualEnd()
+            && PokerEnginePotVerification.runAll()
     }
 
     /// UTG (seat after BB) opens preflop, not BB.

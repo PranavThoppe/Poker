@@ -53,6 +53,7 @@ enum GameMode: String, Codable, Equatable {
 enum GamePhase: Codable, Equatable {
     case waiting
     case playing
+    case showdown
     case handSummary
     case ended
 }
@@ -90,6 +91,41 @@ enum HandRank: String, Codable, CaseIterable {
     case fourOfAKind = "4 of a Kind"
     case straightFlush = "Straight Flush"
     case royalFlush = "Royal Flush"
+}
+
+// MARK: - Showdown / pot result
+
+struct RevealedHand: Codable, Equatable {
+    let playerID: String
+    let holeCards: [Card]
+    let rank: HandRank
+    let bestFive: [Card]
+}
+
+struct PotAward: Codable, Equatable {
+    let amount: Int
+    let eligibleIDs: [String]
+    let winnerIDs: [String]
+    let shares: [String: Int]
+    let isSidePot: Bool
+}
+
+struct HandResult: Codable, Equatable {
+    var pots: [PotAward] = []
+    var payouts: [String: Int] = [:]
+    var reveals: [RevealedHand] = []
+    var wentToShowdown: Bool = false
+
+    var winnerIDs: [String] {
+        var seen = Set<String>()
+        var ids: [String] = []
+        for id in pots.flatMap(\.winnerIDs) where seen.insert(id).inserted {
+            ids.append(id)
+        }
+        return ids
+    }
+
+    var totalAwarded: Int { payouts.values.reduce(0, +) }
 }
 
 // MARK: - Per-player hand tracking (session)
@@ -146,8 +182,17 @@ struct GameState: Codable {
     var streetBetLevel: Int = 0
     var lastRaiseSize: Int = 10
     var actedThisStreet: [String] = []
-    var lastHandWinnerID: String? = nil
-    var lastPotAwarded: Int = 0
+    /// Chips each player has put in this hand. Optional so older `game_rooms` rows still decode.
+    var contributions: [String: Int]? = nil
+    /// Outcome of the just-finished hand. Public `reveals` fill in as each player shows.
+    var handResult: HandResult? = nil
+    /// Last player who bet or raised this hand. Optional so older rows still decode.
+    var lastAggressorID: String? = nil
+    /// Whose turn it is to tap Show. Kept in sync with `activePlayerID` during `.showdown`.
+    var pendingRevealPlayerID: String? = nil
+
+    var lastHandWinnerID: String? { handResult?.winnerIDs.first }
+    var lastPotAwarded: Int { handResult?.totalAwarded ?? 0 }
 
     var version: Int { stateVersion ?? 0 }
 }

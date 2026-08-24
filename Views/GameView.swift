@@ -4,6 +4,7 @@ import SwiftUI
 
 struct GameView: View {
     @EnvironmentObject var store: GameStore
+    @State private var isBoardRevealing = false
 
     private var hero: Player? {
         guard let heroID = store.state.heroID else { return nil }
@@ -36,7 +37,8 @@ struct GameView: View {
                 BoardView(
                     board: store.state.board,
                     pot: store.state.pot,
-                    streetLabel: store.state.bettingRound.displayName
+                    streetLabel: store.state.bettingRound.displayName,
+                    isRevealing: $isBoardRevealing
                 )
 
                 Spacer()
@@ -47,7 +49,7 @@ struct GameView: View {
                     maximumRaiseAmount: maximumRaiseAmount,
                     raiseIncrement: PokerEngine.smallBlind,
                     canRaise: canRaise,
-                    isHeroTurn: store.isHeroTurn,
+                    isHeroTurn: store.isHeroTurn && !isBoardRevealing,
                     onCheck: { store.check() },
                     onCall: { store.call() },
                     onRaise: { store.raise($0) },
@@ -133,6 +135,16 @@ struct BoardView: View {
     let board: [Card?]
     let pot: Int
     var streetLabel: String? = nil
+    var highlightedCardIDs: Set<String>? = nil
+    @Binding var isRevealing: Bool
+
+    /// Face-up flags lag the engine board so new cards can flip in.
+    @State private var isFaceUp = Array(repeating: false, count: 5)
+    @State private var revealTask: Task<Void, Never>?
+    @State private var hasSyncedInitialBoard = false
+
+    private static let flipDuration: TimeInterval = 0.45
+    private static let staggerDelay: TimeInterval = 0.22
 
     var body: some View {
         VStack(alignment: .trailing, spacing: Theme.Spacing.xs) {
@@ -146,7 +158,8 @@ struct BoardView: View {
             HStack(spacing: Theme.Spacing.sm) {
                 ForEach(0..<5, id: \.self) { i in
                     if let card = board[safe: i] ?? nil {
-                        CardView(card: card)
+                        FlippableBoardCard(card: card, isFaceUp: isFaceUp[i])
+                            .opacity(boardCardOpacity(for: card))
                     } else {
                         CardBackView()
                     }
@@ -159,6 +172,72 @@ struct BoardView: View {
                 .padding(.trailing, Theme.Spacing.xs)
         }
         .padding(.horizontal, Theme.Spacing.md)
+        .onAppear {
+            guard !hasSyncedInitialBoard else { return }
+            hasSyncedInitialBoard = true
+            // Cold start / rejoin: show already-dealt cards without replaying flips.
+            syncReveals(animated: false)
+        }
+        .onChange(of: boardSignature) { _ in
+            guard hasSyncedInitialBoard else { return }
+            syncReveals(animated: true)
+        }
+        .onDisappear {
+            revealTask?.cancel()
+            revealTask = nil
+            isRevealing = false
+        }
+    }
+
+    /// Stable identity for board contents so `onChange` fires when cards appear/clear.
+    private var boardSignature: String {
+        board.map { $0?.id ?? "_" }.joined(separator: "|")
+    }
+
+    private func boardCardOpacity(for card: Card) -> Double {
+        guard let highlightedCardIDs else { return 1 }
+        return highlightedCardIDs.contains(card.id) ? 1 : 0.35
+    }
+
+    private func syncReveals(animated: Bool) {
+        revealTask?.cancel()
+
+        for i in 0..<5 {
+            if (board[safe: i] ?? nil) == nil {
+                isFaceUp[i] = false
+            }
+        }
+
+        let pending = (0..<5).filter { i in
+            (board[safe: i] ?? nil) != nil && !isFaceUp[i]
+        }
+
+        guard !pending.isEmpty else {
+            isRevealing = false
+            return
+        }
+
+        if !animated {
+            for i in pending { isFaceUp[i] = true }
+            isRevealing = false
+            return
+        }
+
+        isRevealing = true
+        revealTask = Task { @MainActor in
+            for (offset, index) in pending.enumerated() {
+                if offset > 0 {
+                    try? await Task.sleep(nanoseconds: UInt64(Self.staggerDelay * 1_000_000_000))
+                }
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeInOut(duration: Self.flipDuration)) {
+                    isFaceUp[index] = true
+                }
+            }
+            try? await Task.sleep(nanoseconds: UInt64(Self.flipDuration * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            isRevealing = false
+        }
     }
 }
 

@@ -25,7 +25,8 @@ Run in **Debug** on device or simulator. Filter the Xcode console with **`[Game]
 | 5 | Hero fold | ☐ | `hero … → fold`; hand may end or continue with fewer actors. |
 | 6 | Street advance | ☐ | After betting closes: `hand complete` → `next hand` or street change in snapshot (`street=Flop/Turn/River`). |
 | 7 | Bot fold-out | ☐ | All bots fold; pot awarded without showdown; `hand complete` → `next hand`. |
-| 8 | Showdown | ☐ | Play to river with callers; winner resolved; stats/pot update in snapshots. |
+| 8 | Showdown | ☐ | Play to river with callers; after all hands are shown, **Continue** has no countdown and waits for your tap (even if a bot won). |
+| 8b | Hand summary | ☐ | **Next Hand** / **See Final Results** has no countdown; advances only when you tap. |
 | 9 | Elimination | ☐ | Play until one player holds all chips; `hand complete` → `endGame`. |
 | 10 | EndGameView | ☐ | `phase playing → ended`; stats list, winner highlighted; **Final** shows every player’s chip count (not `—`). |
 | 10b | Manual Finish game | ☐ | More options → Finish game (test): chip leader marked winner; all **Final** values populated. |

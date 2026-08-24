@@ -163,8 +163,13 @@ Possible `reason` values:
 ### Hand result
 
 - `showdownStarted`
+- `cardsShown`
+- `showdownAutoShown`
+- `showdownAdvancedByWinner`
+- `showdownAutoAdvanced`
 - `handRankEvaluated`
 - `potAwarded`
+- `splitPot`
 - `handWonByFold`
 - `handWonAtShowdown`
 - `playerEliminated`
@@ -231,11 +236,14 @@ Repeat hands as needed to cover every action.
 | 1 | End a hand by all other players folding | ☐ | `handWonByFold`, `potAwarded`, `handCompleted`; no showdown event. |
 | 2 | Reach showdown with at least two players | ☐ | `handRankEvaluated` for each contender, then `handWonAtShowdown`. |
 | 3 | Inspect the winner | ☐ | The complete pot is added once; both devices show the same winner and stack. |
-| 4 | Inspect hand summary | ☐ | Both devices enter `handSummary` with matching statistics. |
-| 5 | Guest attempts to continue | ☐ | No local hand starts; `guestContinueBlocked`. |
-| 6 | Host continues | ☐ | `nextHandStarted`; dealer rotates and new private cards are available. |
-| 7 | Reduce a stack to zero | ☐ | `playerEliminated`; the player is not assigned future turns or cards. |
-| 8 | Leave one player with chips | ☐ | `gameEnded`; both devices show the same final stacks and winner ID. |
+| 4 | Inspect the table after the last hand is shown | ☐ | The winner sees Continue with a countdown; every other device waits on the winner's name. |
+| 5 | Winner taps Continue | ☐ | `showdownAdvancedByWinner`; both devices leave `showdown` together. |
+| 6 | Let the winner's countdown expire instead | ☐ | `showdownAutoAdvanced` once; the table still advances if the winner never taps. |
+| 7 | Inspect hand summary | ☐ | Both devices enter `handSummary` with matching statistics. |
+| 8 | Guest attempts to continue | ☐ | No local hand starts; `guestContinueBlocked`. |
+| 9 | Host continues | ☐ | `nextHandStarted`; dealer rotates and new private cards are available. |
+| 10 | Reduce a stack to zero | ☐ | `playerEliminated`; the player is not assigned future turns or cards. |
+| 11 | Leave one player with chips | ☐ | `gameEnded`; both devices show the same final stacks and winner ID. |
 
 ## Synchronization and recovery test
 

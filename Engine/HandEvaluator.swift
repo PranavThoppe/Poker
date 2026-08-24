@@ -32,20 +32,24 @@ enum HandEvaluator {
   }
 
   /// Best hand from up to 7 cards (hole + board).
-  static func evaluateBest(from cards: [Card]) -> (score: HandScore, rank: HandRank) {
+  static func evaluateBest(from cards: [Card]) -> (score: HandScore, rank: HandRank, bestFive: [Card]) {
       guard !cards.isEmpty else {
-          return (HandScore(category: 0, kickers: []), .highCard)
+          return (HandScore(category: 0, kickers: []), .highCard, [])
       }
       if cards.count <= 5 {
           let score = evaluateFive(cards)
-          return (score, handRank(for: score.category))
+          return (score, handRank(for: score.category), cards)
       }
-      var best = evaluateFive(Array(cards.prefix(5)))
+      var bestCards = Array(cards.prefix(5))
+      var best = evaluateFive(bestCards)
       for combo in combinations(cards, choose: 5) {
           let score = evaluateFive(combo)
-          if score > best { best = score }
+          if score > best {
+              best = score
+              bestCards = combo
+          }
       }
-      return (best, handRank(for: best.category))
+      return (best, handRank(for: best.category), bestCards)
   }
 
   static func handRank(for category: Int) -> HandRank {

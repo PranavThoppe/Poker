@@ -174,11 +174,12 @@ enum GameLog {
     }
 
     static func logHandResolution(before: ActionSnapshot, state: GameState) {
+        let result = state.handResult
         let contenders = state.players.filter { !$0.isEliminated && !$0.isFolded }
 
-        if contenders.count == 1, let winnerID = state.lastHandWinnerID {
+        if result?.wentToShowdown == false, let winnerID = state.lastHandWinnerID {
             record("handWonByFold", state: state, playerID: winnerID, winnerID: winnerID)
-        } else if contenders.count > 1 {
+        } else if contenders.count > 1 || result?.wentToShowdown == true {
             if before.bettingRound == .river {
                 record(
                     "streetAdvanced",
@@ -195,12 +196,35 @@ enum GameLog {
                 let rank = HandEvaluator.evaluateBest(from: hole + board).rank.logKey
                 record("handRankEvaluated", state: state, playerID: player.id, handRank: rank)
             }
-            if let winnerID = state.lastHandWinnerID {
+            for winnerID in result?.winnerIDs ?? [] {
                 record("handWonAtShowdown", state: state, playerID: winnerID, winnerID: winnerID)
             }
         }
 
-        if state.lastPotAwarded > 0, let winnerID = state.lastHandWinnerID {
+        if let pots = result?.pots {
+            for pot in pots {
+                let potLabel = pot.isSidePot ? "sidePot" : "mainPot"
+                if pot.winnerIDs.count > 1 {
+                    record(
+                        "splitPot",
+                        state: state,
+                        amount: pot.amount,
+                        reason: potLabel,
+                        winnerID: pot.winnerIDs.first
+                    )
+                }
+                for winnerID in pot.winnerIDs {
+                    record(
+                        "potAwarded",
+                        state: state,
+                        playerID: winnerID,
+                        amount: pot.shares[winnerID] ?? 0,
+                        reason: potLabel,
+                        winnerID: winnerID
+                    )
+                }
+            }
+        } else if state.lastPotAwarded > 0, let winnerID = state.lastHandWinnerID {
             record(
                 "potAwarded",
                 state: state,
@@ -282,6 +306,23 @@ enum GameLog {
 
     static func showdownResolvedByHost(state: GameState) {
         record("showdownResolvedByHost", state: state, winnerID: state.lastHandWinnerID)
+    }
+
+    static func cardsShown(playerID: String, state: GameState) {
+        record("cardsShown", state: state, playerID: playerID)
+    }
+
+    static func showdownAutoShown(playerID: String, state: GameState) {
+        record("showdownAutoShown", state: state, playerID: playerID)
+    }
+
+    static func showdownAdvanced(playerID: String?, auto: Bool, state: GameState) {
+        record(
+            auto ? "showdownAutoAdvanced" : "showdownAdvancedByWinner",
+            state: state,
+            playerID: playerID,
+            winnerID: state.lastHandWinnerID
+        )
     }
 
     static func guestContinueBlocked(state: GameState) {
@@ -485,8 +526,8 @@ enum GameLog {
             "\(label) | players=\(state.players.count) pot=\(state.pot) "
             + "street=\(state.bettingRound.displayName) active=\(active) "
             + "phase=\(state.phase) dealer=\(dealer)"
-        if let winnerID = state.lastHandWinnerID, state.lastPotAwarded > 0 {
-            line += " lastPot=\(state.lastPotAwarded) winner=\(winnerID)"
+        if let result = state.handResult, result.totalAwarded > 0 {
+            line += " lastPot=\(result.totalAwarded) winners=\(result.winnerIDs.joined(separator: ","))"
         }
         return line
     }
@@ -504,6 +545,7 @@ enum GameLog {
         switch phase {
         case .waiting: return "waiting"
         case .playing: return "playing"
+        case .showdown: return "showdown"
         case .handSummary: return "handSummary"
         case .ended: return "ended"
         }

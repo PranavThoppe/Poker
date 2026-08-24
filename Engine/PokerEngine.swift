@@ -22,6 +22,10 @@ struct PokerEngine {
         state.streetBetLevel = 0
         state.lastRaiseSize = Self.bigBlind
         state.actedThisStreet = []
+        state.contributions = [:]
+        state.handResult = nil
+        state.lastAggressorID = nil
+        state.pendingRevealPlayerID = nil
     }
 
     mutating func startHand(_ state: inout GameState) {
@@ -41,8 +45,10 @@ struct PokerEngine {
         state.streetBetLevel = 0
         state.lastRaiseSize = Self.bigBlind
         state.actedThisStreet = []
-        state.lastHandWinnerID = nil
-        state.lastPotAwarded = 0
+        state.contributions = [:]
+        state.handResult = nil
+        state.lastAggressorID = nil
+        state.pendingRevealPlayerID = nil
         state.bettingRound = .preFlop
 
         rotateDealer(&state)
@@ -101,6 +107,7 @@ struct PokerEngine {
             if targetTotal > previousLevel {
                 state.lastRaiseSize = targetTotal - previousLevel
                 state.streetBetLevel = targetTotal
+                state.lastAggressorID = playerID
                 resetActed(&state, except: playerID)
             }
         }
@@ -116,8 +123,8 @@ struct PokerEngine {
             return true
         }
 
-        if let winnerIdx = soleRemainingPlayerIndex(&state) {
-            awardPotToWinner(&state, winnerIndex: winnerIdx, wentToShowdown: false)
+        if soleRemainingPlayerIndex(&state) != nil {
+            distributePots(&state, wentToShowdown: false)
             return true
         }
 
@@ -195,20 +202,250 @@ struct PokerEngine {
         }
         guard !contenders.isEmpty else { return }
 
-        let boardCards = state.board.compactMap { $0 }
-        var bestIdx = contenders[0]
-        var bestScore = handScore(for: state.players[bestIdx].id, board: boardCards, state: state)
+        distributePots(&state, wentToShowdown: true)
+        updateHeroDisplay(&state)
+    }
 
-        for idx in contenders.dropFirst() {
-            let score = handScore(for: state.players[idx].id, board: boardCards, state: state)
-            if score > bestScore {
-                bestScore = score
-                bestIdx = idx
+    // MARK: - Pots
+
+    /// Layers the pot at each distinct contribution. Folded players still fund a layer but
+    /// are not eligible to win it. Adjacent layers with the same eligible set are merged so
+    /// a no-all-in hand is a single pot.
+    func buildPots(_ state: GameState) -> [PotAward] {
+        let contributions = state.contributions ?? [:]
+        if contributions.values.allSatisfy({ $0 <= 0 }), state.pot > 0 {
+            let eligible = state.players
+                .filter { !$0.isEliminated && !$0.isFolded }
+                .map(\.id)
+            return [PotAward(
+                amount: state.pot,
+                eligibleIDs: eligible,
+                winnerIDs: [],
+                shares: [:],
+                isSidePot: false
+            )]
+        }
+
+        let levels = Set(contributions.values.filter { $0 > 0 }).sorted()
+        var layers: [(amount: Int, eligible: [String])] = []
+        var previous = 0
+        for level in levels {
+            let increment = level - previous
+            previous = level
+            let contributors = contributions.keys.filter { (contributions[$0] ?? 0) >= level }
+            let amount = increment * contributors.count
+            guard amount > 0 else { continue }
+            let eligible = contributors.filter { id in
+                guard let player = state.players.first(where: { $0.id == id }) else { return false }
+                return !player.isFolded && !player.isEliminated
+            }
+            layers.append((amount: amount, eligible: eligible))
+        }
+
+        var merged: [(amount: Int, eligible: [String])] = []
+        for layer in layers {
+            if let last = merged.last, Set(last.eligible) == Set(layer.eligible) {
+                merged[merged.count - 1].amount += layer.amount
+            } else {
+                merged.append(layer)
             }
         }
 
-        awardPotToWinner(&state, winnerIndex: bestIdx, wentToShowdown: true)
+        return merged.enumerated().map { index, layer in
+            PotAward(
+                amount: layer.amount,
+                eligibleIDs: layer.eligible,
+                winnerIDs: [],
+                shares: [:],
+                isSidePot: index > 0
+            )
+        }
+    }
+
+    /// Awards every pot layer, splitting exact ties and giving leftover chips clockwise
+    /// from the seat left of the button. Fold-outs skip evaluation and show no cards.
+    mutating func distributePots(_ state: inout GameState, wentToShowdown: Bool) {
+        let potBefore = state.pot
+        let boardCards = state.board.compactMap { $0 }
+        var payouts: [String: Int] = [:]
+        var awarded: [PotAward] = []
+
+        for layer in buildPots(state) {
+            var eligible = layer.eligibleIDs.filter { id in
+                guard let player = state.players.first(where: { $0.id == id }) else { return false }
+                return !player.isFolded && !player.isEliminated
+            }
+            if eligible.isEmpty {
+                eligible = state.players.filter { !$0.isEliminated && !$0.isFolded }.map(\.id)
+            }
+            guard !eligible.isEmpty, layer.amount > 0 else { continue }
+
+            let winnerIDs: [String]
+            if wentToShowdown, eligible.count > 1 {
+                winnerIDs = tiedWinners(eligibleIDs: eligible, board: boardCards, state: state)
+            } else {
+                winnerIDs = eligible
+            }
+
+            let shares = splitAmount(layer.amount, among: winnerIDs, in: state)
+            for (id, share) in shares {
+                payouts[id, default: 0] += share
+            }
+            awarded.append(PotAward(
+                amount: layer.amount,
+                eligibleIDs: layer.eligibleIDs,
+                winnerIDs: winnerIDs,
+                shares: shares,
+                isSidePot: layer.isSidePot
+            ))
+        }
+
+        #if DEBUG
+        let distributed = payouts.values.reduce(0, +)
+        assert(distributed == potBefore, "pot leaked: awarded \(distributed) of \(potBefore)")
+        #endif
+
+        for (id, share) in payouts {
+            if let idx = state.players.firstIndex(where: { $0.id == id }) {
+                state.players[idx].stack += share
+            }
+            var stats = state.handStats[id, default: PlayerHandStats()]
+            stats.handsWon += 1
+            stats.biggestPot = max(stats.biggestPot, share)
+            state.handStats[id] = stats
+        }
+
+        var reveals: [RevealedHand] = []
+
+        state.handResult = HandResult(
+            pots: awarded,
+            payouts: payouts,
+            reveals: reveals,
+            wentToShowdown: wentToShowdown
+        )
+        state.pot = 0
+        clearStreetBets(&state)
+
+        for i in state.players.indices where state.players[i].stack <= 0 && !state.players[i].isEliminated {
+            state.players[i].isEliminated = true
+            state.players[i].stack = 0
+        }
+
+        if wentToShowdown {
+            beginShowdownReveal(&state)
+        } else {
+            state.pendingRevealPlayerID = nil
+            state.activePlayerID = nil
+        }
+    }
+
+    /// Last aggressor first if they are still in, otherwise first live seat left of the button,
+    /// then clockwise among players who did not fold.
+    func showdownRevealOrder(_ state: GameState) -> [String] {
+        let live = state.players.filter { !$0.isEliminated && !$0.isFolded }.map(\.id)
+        guard !live.isEmpty else { return [] }
+
+        let liveSet = Set(live)
+        let startID: String
+        if let aggressor = state.lastAggressorID, liveSet.contains(aggressor) {
+            startID = aggressor
+        } else {
+            let count = state.players.count
+            let dealer = dealerIndex(state)
+            startID = (0..<count).compactMap { offset -> String? in
+                let id = state.players[(dealer + 1 + offset) % count].id
+                return liveSet.contains(id) ? id : nil
+            }.first ?? live[0]
+        }
+
+        guard let startIndex = state.players.firstIndex(where: { $0.id == startID }) else { return live }
+        var ordered: [String] = []
+        for offset in 0..<state.players.count {
+            let id = state.players[(startIndex + offset) % state.players.count].id
+            if liveSet.contains(id) {
+                ordered.append(id)
+            }
+        }
+        return ordered
+    }
+
+    mutating func beginShowdownReveal(_ state: inout GameState) {
+        guard state.handResult?.wentToShowdown == true else {
+            state.pendingRevealPlayerID = nil
+            state.activePlayerID = nil
+            return
+        }
+        let shown = Set(state.handResult?.reveals.map(\.playerID) ?? [])
+        let next = showdownRevealOrder(state).first { !shown.contains($0) }
+        state.pendingRevealPlayerID = next
+        state.activePlayerID = next
+    }
+
+    /// Copies `playerID`'s hole cards into public `handResult.reveals` and advances the queue.
+    /// Prefers the host-owned `holeCardsByPlayer` map so a guest cannot spoof a hand.
+    @discardableResult
+    mutating func applyShowdownReveal(
+        _ state: inout GameState,
+        playerID: String,
+        holeCards: [Card] = []
+    ) -> Bool {
+        guard state.pendingRevealPlayerID == playerID,
+              var result = state.handResult,
+              result.wentToShowdown,
+              !result.reveals.contains(where: { $0.playerID == playerID })
+        else { return false }
+
+        let hole: [Card]
+        if let real = state.holeCardsByPlayer[playerID], !real.isEmpty {
+            hole = real
+        } else if !holeCards.isEmpty {
+            hole = holeCards
+        } else {
+            return false
+        }
+
+        let board = state.board.compactMap { $0 }
+        let evaluation = HandEvaluator.evaluateBest(from: hole + board)
+        result.reveals.append(RevealedHand(
+            playerID: playerID,
+            holeCards: hole,
+            rank: evaluation.rank,
+            bestFive: evaluation.bestFive
+        ))
+        state.handResult = result
+
+        let shown = Set(result.reveals.map(\.playerID))
+        let next = showdownRevealOrder(state).first { !shown.contains($0) }
+        state.pendingRevealPlayerID = next
+        state.activePlayerID = next
         updateHeroDisplay(&state)
+        return true
+    }
+
+    /// Replaces guest-published hole cards with the host's dealt cards.
+    @discardableResult
+    mutating func correctShowdownReveals(_ state: inout GameState) -> Bool {
+        guard var result = state.handResult, !result.reveals.isEmpty else { return false }
+        let board = state.board.compactMap { $0 }
+        var changed = false
+        for i in result.reveals.indices {
+            let id = result.reveals[i].playerID
+            guard let real = state.holeCardsByPlayer[id], !real.isEmpty else { continue }
+            if result.reveals[i].holeCards != real {
+                let evaluation = HandEvaluator.evaluateBest(from: real + board)
+                result.reveals[i] = RevealedHand(
+                    playerID: id,
+                    holeCards: real,
+                    rank: evaluation.rank,
+                    bestFive: evaluation.bestFive
+                )
+                changed = true
+            }
+        }
+        if changed {
+            state.handResult = result
+        }
+        return changed
     }
 
     // MARK: - Private helpers
@@ -218,31 +455,55 @@ struct PokerEngine {
         return HandEvaluator.evaluateBest(from: hole + board).score
     }
 
-    private mutating func awardPotToWinner(
-        _ state: inout GameState,
-        winnerIndex: Int,
-        wentToShowdown: Bool
-    ) {
-        let winnerID = state.players[winnerIndex].id
-        let potAmount = state.pot
-        state.lastHandWinnerID = winnerID
-        state.lastPotAwarded = potAmount
-        if potAmount > 0 {
-            state.players[winnerIndex].stack += potAmount
-            var stats = state.handStats[winnerID, default: PlayerHandStats()]
-            stats.handsWon += 1
-            stats.biggestPot = max(stats.biggestPot, potAmount)
-            state.handStats[winnerID] = stats
+    private func tiedWinners(eligibleIDs: [String], board: [Card], state: GameState) -> [String] {
+        var bestScore: HandScore?
+        var winners: [String] = []
+        for id in eligibleIDs {
+            let score = handScore(for: id, board: board, state: state)
+            if let best = bestScore {
+                if score > best {
+                    bestScore = score
+                    winners = [id]
+                } else if score == best {
+                    winners.append(id)
+                }
+            } else {
+                bestScore = score
+                winners = [id]
+            }
         }
-        state.pot = 0
-        clearStreetBets(&state)
+        return winners
+    }
 
-        for i in state.players.indices where state.players[i].stack <= 0 && !state.players[i].isEliminated {
-            state.players[i].isEliminated = true
-            state.players[i].stack = 0
+    private func splitAmount(_ amount: Int, among winnerIDs: [String], in state: GameState) -> [String: Int] {
+        guard !winnerIDs.isEmpty else { return [:] }
+        let base = amount / winnerIDs.count
+        var remainder = amount % winnerIDs.count
+        var shares = Dictionary(uniqueKeysWithValues: winnerIDs.map { ($0, base) })
+        guard remainder > 0 else { return shares }
+
+        for id in clockwiseFromButton(winnerIDs: winnerIDs, in: state) {
+            guard remainder > 0 else { break }
+            shares[id, default: 0] += 1
+            remainder -= 1
         }
+        return shares
+    }
 
-        state.activePlayerID = nil
+    /// First live winner left of the button, then clockwise — standard odd-chip order.
+    private func clockwiseFromButton(winnerIDs: [String], in state: GameState) -> [String] {
+        let winners = Set(winnerIDs)
+        let count = state.players.count
+        guard count > 0 else { return winnerIDs }
+        let start = (dealerIndex(state) + 1) % count
+        var ordered: [String] = []
+        for offset in 0..<count {
+            let id = state.players[(start + offset) % count].id
+            if winners.contains(id) {
+                ordered.append(id)
+            }
+        }
+        return ordered
     }
 
     /// Seats posting the blinds. Heads-up the button posts the small blind; otherwise the
@@ -281,6 +542,9 @@ struct PokerEngine {
         state.players[playerIndex].stack -= pay
         state.players[playerIndex].currentBet += pay
         state.pot += pay
+        var contributions = state.contributions ?? [:]
+        contributions[state.players[playerIndex].id, default: 0] += pay
+        state.contributions = contributions
         if state.players[playerIndex].currentBet > state.streetBetLevel {
             state.streetBetLevel = state.players[playerIndex].currentBet
         }

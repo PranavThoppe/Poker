@@ -18,6 +18,12 @@ enum PokerEngineVerification {
             && guestKeepsFetchedHoleCards()
             && chipLeaderOnManualEnd()
             && betweenHandReadyGate()
+            && riverOpensBettingAfterTurn()
+            && guestClosesTurnHostOpensRiver()
+            && riverRequiresABettingRound()
+            && postflopOpenerIsLeftOfButton()
+            && foldClosingTurnOpensLiveActor()
+            && allInCallOnTurnRunsOutTheBoard()
             && PokerEnginePotVerification.runAll()
     }
 
@@ -307,6 +313,179 @@ enum PokerEngineVerification {
         return store.state.phase == .playing
     }
 
+    /// After turn checks, the river card is dealt and a player must still be able to act —
+    /// the hand must not jump straight to showdown.
+    static func riverOpensBettingAfterTurn() -> Bool {
+        var state = twoPlayerState()
+        var engine = PokerEngine()
+        engine.startGame(&state)
+        engine.startHand(&state)
+
+        var safety = 0
+        while state.bettingRound != .river, safety < 40 {
+            safety += 1
+            guard checkOrCall(&engine, &state) else { return false }
+        }
+
+        return isOpenRiver(state)
+    }
+
+    /// Classic: the guest closes the turn without the deck; the host must deal the river
+    /// and leave a player to bet, not run showdown in that same step.
+    static func guestClosesTurnHostOpensRiver() -> Bool {
+        var state = twoPlayerState()
+        var engine = PokerEngine()
+        engine.startGame(&state)
+        engine.startHand(&state)
+
+        var safety = 0
+        while state.bettingRound != .turn, safety < 40 {
+            safety += 1
+            guard checkOrCall(&engine, &state) else { return false }
+        }
+
+        guard state.bettingRound == .turn,
+              checkOrCall(&engine, &state),
+              state.bettingRound == .turn,
+              let lastID = state.activePlayerID
+        else { return false }
+
+        let hostDeck = state.remainingDeck
+        state.remainingDeck = []
+        let toCall = state.streetBetLevel
+            - (state.players.first { $0.id == lastID }?.currentBet ?? 0)
+        let action: BettingAction = toCall > 0 ? .call(amount: toCall) : .check
+        guard engine.applyAction(
+            &state,
+            playerID: lastID,
+            action: action,
+            canResolveBettingRound: false
+        ) else { return false }
+
+        guard state.bettingRound == .turn,
+              state.activePlayerID == nil,
+              state.board.compactMap({ $0 }).count == 4,
+              state.handResult == nil
+        else { return false }
+
+        state.remainingDeck = hostDeck
+        guard engine.resolvePendingBettingRound(&state) else { return false }
+        return isOpenRiver(state)
+    }
+
+    /// Both players must still get a river decision. Showdown only after that street closes.
+    static func riverRequiresABettingRound() -> Bool {
+        var state = twoPlayerState()
+        var engine = PokerEngine()
+        engine.startGame(&state)
+        engine.startHand(&state)
+
+        var safety = 0
+        while state.bettingRound != .river, safety < 40 {
+            safety += 1
+            guard checkOrCall(&engine, &state) else { return false }
+        }
+        guard isOpenRiver(state) else { return false }
+
+        guard checkOrCall(&engine, &state),
+              state.handResult == nil,
+              state.bettingRound == .river
+        else { return false }
+        guard checkOrCall(&engine, &state) else { return false }
+        return state.handResult?.wentToShowdown == true
+    }
+
+    /// Every post-flop street opens on the first live seat left of the button — heads-up
+    /// that is the big blind, on every street. A street must not inherit the pointer from
+    /// the seat that closed the previous one.
+    static func postflopOpenerIsLeftOfButton() -> Bool {
+        var state = twoPlayerState()
+        var engine = PokerEngine()
+        engine.startGame(&state)
+        engine.startHand(&state)
+
+        guard let bigBlindID = state.players.first(where: { !$0.isDealer })?.id else { return false }
+
+        for street in [BettingRound.flop, .turn, .river] {
+            var safety = 0
+            while state.bettingRound != street, safety < 12 {
+                safety += 1
+                guard checkOrCall(&engine, &state) else { return false }
+            }
+            guard state.bettingRound == street,
+                  state.activePlayerID == bigBlindID else { return false }
+        }
+        return true
+    }
+
+    /// A fold that closes the turn must not leave the folded player on the clock for the
+    /// river: they have no legal action, so the table would sit there with nobody able to
+    /// bet and no pointer for recovery to notice.
+    static func foldClosingTurnOpensLiveActor() -> Bool {
+        var state = turnState(
+            players: [
+                Player(id: "button", name: "Button", stack: 360, currentBet: 40, avatarIndex: 0),
+                Player(id: "sb",     name: "SB",     stack: 360, currentBet: 40, avatarIndex: 1),
+                Player(id: "bb",     name: "BB",     stack: 400, currentBet: 0,  avatarIndex: 2),
+            ],
+            streetBetLevel: 40,
+            actedThisStreet: ["button", "sb"],
+            activePlayerID: "bb",
+            contributions: ["button": 40, "sb": 40]
+        )
+
+        var engine = PokerEngine()
+        guard engine.applyAction(&state, playerID: "bb", action: .fold) else { return false }
+
+        guard state.bettingRound == .river,
+              state.board.compactMap({ $0 }).count == 5,
+              state.handResult == nil,
+              state.activePlayerID == "sb" else { return false }
+        return !engine.legalActions(for: state, playerID: "sb").isEmpty
+    }
+
+    /// An all-in call that closes the turn leaves nobody with chips, so the board runs out
+    /// and the hand reaches showdown instead of stalling on a player who cannot act.
+    static func allInCallOnTurnRunsOutTheBoard() -> Bool {
+        var state = turnState(
+            players: [
+                Player(id: "shover", name: "Shover", stack: 0,   currentBet: 200, avatarIndex: 0),
+                Player(id: "caller", name: "Caller", stack: 120, currentBet: 0,   avatarIndex: 1),
+            ],
+            streetBetLevel: 200,
+            actedThisStreet: ["shover"],
+            activePlayerID: "caller",
+            contributions: ["shover": 200]
+        )
+        state.holeCardsByPlayer = [
+            "shover": [Card(rank: .queen, suit: .hearts), Card(rank: .queen, suit: .spades)],
+            "caller": [Card(rank: .jack,  suit: .diamonds), Card(rank: .jack, suit: .clubs)],
+        ]
+
+        var engine = PokerEngine()
+        guard engine.applyAction(&state, playerID: "caller", action: .call(amount: 200)) else { return false }
+
+        return state.bettingRound == .river
+            && state.board.compactMap({ $0 }).count == 5
+            && state.handResult?.wentToShowdown == true
+    }
+
+    private static func checkOrCall(_ engine: inout PokerEngine, _ state: inout GameState) -> Bool {
+        guard let active = state.activePlayerID else { return false }
+        let toCall = state.streetBetLevel
+            - (state.players.first { $0.id == active }?.currentBet ?? 0)
+        let action: BettingAction = toCall > 0 ? .call(amount: toCall) : .check
+        return engine.applyAction(&state, playerID: active, action: action)
+    }
+
+    private static func isOpenRiver(_ state: GameState) -> Bool {
+        state.bettingRound == .river
+            && state.board.compactMap({ $0 }).count == 5
+            && state.activePlayerID != nil
+            && state.handResult == nil
+            && state.phase != .showdown
+    }
+
     // MARK: - Fixtures
 
     private static func fivePlayerState(dealerIndex: Int) -> GameState {
@@ -322,6 +501,37 @@ enum PokerEngineVerification {
         for i in state.players.indices {
             state.players[i].isDealer = i == dealerIndex
         }
+        return state
+    }
+
+    /// A hand already on the turn, seat 0 on the button. `remainingDeck` is left empty so
+    /// the engine rebuilds it from the cards not already in play.
+    private static func turnState(
+        players: [Player],
+        streetBetLevel: Int,
+        actedThisStreet: [String],
+        activePlayerID: String,
+        contributions: [String: Int]
+    ) -> GameState {
+        var state = GameState()
+        state.phase = .playing
+        state.players = players
+        state.players[0].isDealer = true
+        state.bettingRound = .turn
+        state.board = [
+            Card(rank: .ace,   suit: .hearts),
+            Card(rank: .king,  suit: .diamonds),
+            Card(rank: .seven, suit: .clubs),
+            Card(rank: .two,   suit: .spades),
+            nil,
+        ]
+        state.pot = contributions.values.reduce(0, +)
+        state.contributions = contributions
+        state.streetBetLevel = streetBetLevel
+        state.lastRaiseSize = max(streetBetLevel, PokerEngine.bigBlind)
+        state.actedThisStreet = actedThisStreet
+        state.activePlayerID = activePlayerID
+        state.remainingDeck = []
         return state
     }
 

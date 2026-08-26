@@ -147,12 +147,20 @@ Possible `reason` values:
 - `streetAdvanced`
 - `communityCardsDealt`
 
+These are also emitted by the host when it deals a street after merging a peer's closing
+action, not only by the device that acted. A street that changes with no accompanying
+`streetAdvanced` is a bug in the log, not evidence of a skipped street.
+
 `streetAdvanced` possibilities:
 
 - `preFlop` → `flop`
 - `flop` → `turn`
 - `turn` → `river`
 - `river` → `showdown`
+
+Every street between `preFlop` and `river` inclusive gets its own betting round. `river` →
+`showdown` may only follow a closed river betting round, or a street where no remaining
+player had chips left to bet.
 
 `communityCardsDealt` records `card_count`:
 
@@ -174,8 +182,13 @@ Possible `reason` values:
 - `handWonAtShowdown`
 - `playerEliminated`
 - `handCompleted`
+- `handFinalizeBlocked`
 - `handSummaryOpened`
 - `nextHandStarted`
+
+`handFinalizeBlocked` means a device tried to close a hand that had awarded no pot. It is
+never expected during normal play: it marks a hand that could not be resolved, and the
+table is left live for recovery instead of being abandoned into the summary screen.
 
 `handRankEvaluated` uses one of the ten hand-rank values listed above. It may record the rank for each showdown contender, but it must not record private cards.
 
@@ -228,6 +241,9 @@ Repeat hands as needed to cover every action.
 | 8 | Complete turn betting | ☐ | `streetAdvanced` to `river`, `communityCardsDealt` with count 1. |
 | 9 | Complete river betting with multiple players | ☐ | `showdownStarted`; no additional player turn is started. |
 | 10 | Compare after every action | ☐ | Both devices agree on active player, street, board, pot, bets, folds, and stacks. |
+| 11 | Check the opener on every street after the flop | ☐ | `turnStarted` names the first live seat left of the button, never the seat that closed the previous street. |
+| 12 | Let the last player to act fold and close a street | ☐ | The next street deals and `turnStarted` names a player who has not folded; the folded player receives no turn. |
+| 13 | Reach the river with chips behind on both sides | ☐ | Each remaining player gets a river turn before `showdownStarted`; the river is never dealt in the same step as the showdown. |
 
 ## Hand result test
 
@@ -236,11 +252,11 @@ Repeat hands as needed to cover every action.
 | 1 | End a hand by all other players folding | ☐ | `handWonByFold`, `potAwarded`, `handCompleted`; no showdown event. |
 | 2 | Reach showdown with at least two players | ☐ | `handRankEvaluated` for each contender, then `handWonAtShowdown`. |
 | 3 | Inspect the winner | ☐ | The complete pot is added once; both devices show the same winner and stack. |
-| 4 | Inspect the table after the last hand is shown | ☐ | The winner sees Continue with a countdown; every other device waits on the winner's name. |
+| 4 | Inspect the table after the last hand is shown | ☐ | The winner sees Continue with no countdown; every other device waits on the winner's name. |
 | 5 | Winner taps Continue | ☐ | `showdownAdvancedByWinner`; both devices leave `showdown` together. |
-| 6 | Let the winner's countdown expire instead | ☐ | `showdownAutoAdvanced` once; the table still advances if the winner never taps. |
-| 7 | Inspect hand summary | ☐ | Both devices enter `handSummary` with matching statistics; every active player shows **Waiting** beside their stats. |
-| 8 | One player taps Ready Up | ☐ | Both devices show that player as **Ready**; the other active players remain **Waiting**. |
+| 6 | Winner never taps Continue | ☐ | Host silent safety advances after ~14s (`showdownAutoAdvanced`); table still moves on. |
+| 7 | Inspect hand summary | ☐ | Both devices enter `handSummary` with matching statistics; no badge appears beside players who have not readied, and the Ready Up button shows `0/N` for the active players. |
+| 8 | One player taps Ready Up | ☐ | Both devices show that player as **Ready** with no badge on the others, and the ready count on the button rises by one. |
 | 9 | Every active player readies up | ☐ | The host sees **Next Hand** only after all non-eliminated players with chips are ready. |
 | 10 | Host taps Next Hand | ☐ | `nextHandStarted`; dealer rotates and new private cards are available. |
 | 11 | Reduce a stack to zero | ☐ | `playerEliminated`; that player shows **Out**, is not required to ready, and receives no future turns or cards. |

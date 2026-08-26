@@ -173,6 +173,20 @@ enum GameLog {
         console("\(playerID) → \(action.logKey)")
     }
 
+    /// Street transitions that no player action produced: the host dealing a street after
+    /// merging a peer's closing action, or stalled-hand recovery. Without this those deals
+    /// were invisible in the log, so a healthy `turn` → `river` looked like a skipped street.
+    static func logStreetResolved(before: ActionSnapshot, state: GameState) {
+        logTransitions(before: before, after: state)
+    }
+
+    /// A hand that cannot be closed because no pot was awarded. Finalizing here would
+    /// abandon a live hand into the summary screen with no winner.
+    static func handFinalizeBlocked(state: GameState) {
+        record("handFinalizeBlocked", state: state)
+        console(handSnapshot(state, label: "handFinalizeBlocked"))
+    }
+
     static func logHandResolution(before: ActionSnapshot, state: GameState) {
         let result = state.handResult
         let contenders = state.players.filter { !$0.isEliminated && !$0.isFolded }

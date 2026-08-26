@@ -50,6 +50,16 @@ struct HandSummaryView: View {
         return store.state.players.first(where: { $0.id == heroID })?.isReady ?? false
     }
 
+    private var activePlayers: [Player] {
+        store.state.players.filter { !$0.isEliminated && $0.stack > 0 }
+    }
+
+    private var readyCountDetail: String? {
+        guard requiresReadyUp, !activePlayers.isEmpty else { return nil }
+        let readyCount = activePlayers.filter(\.isReady).count
+        return "\(readyCount)/\(activePlayers.count)"
+    }
+
     private var readyStatusByPlayerID: [String: PlayerReadyStatus] {
         guard requiresReadyUp else { return [:] }
         return Dictionary(uniqueKeysWithValues: store.state.players.map { player in
@@ -73,8 +83,11 @@ struct HandSummaryView: View {
             statsSectionTitle: "Leaderboard",
             buttonTitle: buttonTitle,
             onButton: primaryAction,
+            buttonDetail: readyCountDetail,
             secondaryButtonTitle: canStartNextHand ? "Next Hand" : nil,
             onSecondaryButton: { continueIfNeeded() },
+            tertiaryButtonTitle: "Finish Game",
+            onTertiaryButton: { store.endGame() },
             readyStatusByPlayerID: readyStatusByPlayerID,
             buttonFillColor: Theme.Color.green,
             buttonTrackColor: Theme.Color.green.opacity(0.25),

@@ -29,7 +29,7 @@ Run in **Debug** on device or simulator. Filter the Xcode console with **`[Game]
 | 8b | Hand summary | ☐ | **Next Hand** / **See Final Results** has no countdown; advances only when you tap. |
 | 9 | Elimination | ☐ | Play until one player holds all chips; `hand complete` → `endGame`. |
 | 10 | EndGameView | ☐ | `phase playing → ended`; stats list, winner highlighted; **Final** shows every player’s chip count (not `—`). |
-| 10b | Manual Finish game | ☐ | More options → Finish game (test): chip leader marked winner; all **Final** values populated. |
+| 10b | Manual Finish game | ☐ | Hand summary → Finish Game: chip leader marked winner; all **Final** values populated. |
 | 10c | BB option on limp | ☐ | Limp to BB preflop: `[Game]` shows BB check/raise before `street=Flop`. |
 | 11 | Play Again | ☐ | Returns to waiting room; bots stripped (`human=1 bot=0` until next Start). |
 | 12 | Second session | ☐ | Ready → Start again: `players=5 (human=1 bot=4)` re-seeded; full hand cycle works. |

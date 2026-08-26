@@ -18,14 +18,25 @@ final class GameStore: ObservableObject {
     private var stalledHandTask: Task<Void, Never>?
     private var showdownTimeoutTask: Task<Void, Never>?
     private var showdownAdvanceTask: Task<Void, Never>?
+    private var boardRevealFallbackTask: Task<Void, Never>?
     private var lastShowdownTimeoutID: String?
     private var isFetchingHoleCards = false
     private var isRestoringHostHoleCards = false
     /// Consecutive watchdog ticks with nobody on the clock.
     private var stalledPollTicks = 0
 
-    /// How long the winner has to leave the showdown table up before it advances itself.
+    /// True while newly dealt board cards are still flipping face-up. Bots and showdown wait;
+    /// the hero hand-rank label stays on the pre-deal value so it does not spoil the flip.
+    @Published private(set) var isBoardRevealPending = false
+    private var heldHeroHandRank: HandRank?
+    private var deferredShowdownBefore: GameLog.ActionSnapshot?
+    private var deferredShowdownFromRemote = false
+
+    /// How long the host waits (plus a small buffer) before silently advancing showdown
+    /// if the human winner never taps Continue. Not shown as a button countdown.
     static let showdownAdvanceSeconds: TimeInterval = 10
+    /// Safety net if the board view never reports that a flip finished.
+    private static let boardRevealFallbackSeconds: TimeInterval = 2.5
 
     init(state: GameState = GameState()) {
         self.state = state
@@ -36,6 +47,18 @@ final class GameStore: ObservableObject {
         stalledHandTask?.cancel()
         showdownTimeoutTask?.cancel()
         showdownAdvanceTask?.cancel()
+        boardRevealFallbackTask?.cancel()
+    }
+
+    /// Hand rank shown under the hero avatar — frozen during a board flip.
+    var displayedHeroHandRank: HandRank? {
+        isBoardRevealPending ? heldHeroHandRank : state.heroHandRank
+    }
+
+    /// Called by `BoardView` when a community-card flip cycle ends (or there was nothing to flip).
+    func boardRevealFinished() {
+        guard isBoardRevealPending else { return }
+        finishBoardRevealAndContinue()
     }
 
     /// New waiting-room session; `gameID` is embedded in the iMessage bubble URL.
@@ -167,6 +190,7 @@ final class GameStore: ObservableObject {
     }
 
     private func beginHandPhase(from previousPhase: GamePhase) {
+        clearBoardRevealGate()
         if state.handResult?.wentToShowdown == true {
             enterShowdown()
         } else if state.lastHandWinnerID != nil {
@@ -243,6 +267,7 @@ final class GameStore: ObservableObject {
     // MARK: - End game / navigation
 
     func endGame() {
+        clearBoardRevealGate()
         let previousPhase = state.phase
         state.phase = .ended
         state.endStats = buildStats()
@@ -384,6 +409,7 @@ final class GameStore: ObservableObject {
             return
         }
 
+        let rankBefore = state.heroHandRank
         let before = GameLog.ActionSnapshot.capture(from: state, playerID: playerID)
         let canResolveBettingRound = state.gameMode != .classicPoker || isHost
         guard engine.applyAction(
@@ -408,6 +434,9 @@ final class GameStore: ObservableObject {
             GameLog.logAcceptedAction(playerID: playerID, action: action, before: before, after: state)
         }
 
+        let streetBefore = before.bettingRound
+        noteBoardGrowthIfNeeded(previousCount: before.boardCount, holdingRank: rankBefore)
+
         if let result = state.handResult, state.phase == .playing {
             if result.wentToShowdown {
                 enterShowdown(before: before)
@@ -415,14 +444,54 @@ final class GameStore: ObservableObject {
                 finalizeHandIfNeeded(before: before)
             }
         } else if state.activePlayerID == nil {
-            finalizeHandIfNeeded(before: before)
+            // Guest finished a street without the deck; wait for the host to deal.
+            if state.gameMode == .classicPoker && !isHost && state.holeCardsByPlayer.isEmpty {
+                GameLog.showdownDeferredToHost(state: state)
+                publishCurrentState()
+                return
+            }
+            // Prefer resolving/recovering a closed street over jumping to hand summary.
+            let pending = GameLog.ActionSnapshot.capture(from: state, playerID: playerID)
+            let boardBeforeResolve = state.board.compactMap { $0 }.count
+            let rankBeforeResolve = state.heroHandRank
+            if engine.resolvePendingBettingRound(&state) {
+                GameLog.logStreetResolved(before: pending, state: state)
+                noteBoardGrowthIfNeeded(previousCount: boardBeforeResolve, holdingRank: rankBeforeResolve)
+                let dealtNewStreet = streetBefore != state.bettingRound && state.handResult == nil
+                if let result = state.handResult, result.wentToShowdown {
+                    enterShowdown(before: before)
+                } else if state.handResult != nil {
+                    finalizeHandIfNeeded(before: before)
+                } else if state.activePlayerID == nil {
+                    if engine.recoverStalledHand(&state) {
+                        scheduleBotTurnIfNeeded(afterBoardDeal: dealtNewStreet)
+                    } else {
+                        finalizeHandIfNeeded(before: before)
+                    }
+                } else {
+                    scheduleBotTurnIfNeeded(afterBoardDeal: dealtNewStreet)
+                }
+            } else if engine.recoverStalledHand(&state) {
+                scheduleBotTurnIfNeeded()
+            } else {
+                finalizeHandIfNeeded(before: before)
+            }
         } else {
-            scheduleBotTurnIfNeeded()
+            let dealtNewStreet = streetBefore != state.bettingRound && state.handResult == nil
+            scheduleBotTurnIfNeeded(afterBoardDeal: dealtNewStreet)
         }
         publishCurrentState()
     }
 
     private func finalizeHandIfNeeded(before: GameLog.ActionSnapshot? = nil, fromRemotePoll: Bool = false) {
+        // A hand is only over once a pot has been awarded. Finalizing without a result
+        // silently abandons a live hand into the summary screen with no winner, which is
+        // how an unresolved street used to look like the hand had simply ended.
+        guard state.handResult != nil else {
+            GameLog.handFinalizeBlocked(state: state)
+            return
+        }
+
         // Only guests defer. A host missing its card map (relaunched mid-hand) must still
         // close the hand, or the table sits forever with nobody on the clock.
         if state.gameMode == .classicPoker && !isHost && state.holeCardsByPlayer.isEmpty {
@@ -455,6 +524,13 @@ final class GameStore: ObservableObject {
             GameLog.showdownDeferredToHost(state: state)
             return
         }
+        // Keep the playing screen up until the last board flip finishes so the hero can
+        // see the river (and act) before the showdown chrome replaces it.
+        if isBoardRevealPending {
+            deferredShowdownBefore = before
+            deferredShowdownFromRemote = fromRemotePoll
+            return
+        }
         if fromRemotePoll {
             GameLog.showdownResolvedByHost(state: state)
         }
@@ -468,6 +544,7 @@ final class GameStore: ObservableObject {
         engine.beginShowdownReveal(&state)
         botScheduler.cancel()
         cancelShowdownAdvance()
+        clearBoardRevealGate()
         state.endStats = buildHandSummaryStats()
         let previousPhase = state.phase
         state.phase = .showdown
@@ -478,8 +555,8 @@ final class GameStore: ObservableObject {
 
     /// Arms the fallback that closes the showdown table if the winner never taps Continue.
     /// Practice waits indefinitely for the human. Classic: a bot winner advances on its think
-    /// delay; a human winner's device runs the countdown, and the host waits a little longer
-    /// in case that winner has dropped.
+    /// delay; a human winner has no visible countdown — only the host runs a silent safety
+    /// timeout in case that winner has dropped.
     private func scheduleShowdownAdvanceIfNeeded() {
         guard state.gameMode != .practiceVsCPU else { return }
         guard let deciderID = showdownDeciderID else { return }
@@ -491,11 +568,10 @@ final class GameStore: ObservableObject {
             return
         }
 
-        let isHeroDecider = deciderID == state.heroID
-        guard isHeroDecider || isHost else { return }
+        guard isHost else { return }
         guard showdownAdvanceTask == nil else { return }
 
-        let delay = isHeroDecider ? Self.showdownAdvanceSeconds : Self.showdownAdvanceSeconds + 4
+        let delay = Self.showdownAdvanceSeconds + 4
         showdownAdvanceTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(delay))
             guard let self, !Task.isCancelled else { return }
@@ -514,6 +590,7 @@ final class GameStore: ObservableObject {
         showdownTimeoutTask?.cancel()
         cancelShowdownAdvance()
         botScheduler.cancel()
+        clearBoardRevealGate()
         let previousPhase = state.phase
         resetReadyStateForHandSummary()
         state.phase = .handSummary
@@ -555,13 +632,77 @@ final class GameStore: ObservableObject {
         return "illegal"
     }
 
-    private func scheduleBotTurnIfNeeded() {
+    private func scheduleBotTurnIfNeeded(afterBoardDeal: Bool = false) {
         guard state.gameMode == .practiceVsCPU,
               let id = state.activePlayerID,
               isBot(id) else { return }
-        botScheduler.schedule { [weak self] in
+        // New board cards are still flipping — resume from boardRevealFinished instead.
+        guard !isBoardRevealPending else {
+            botScheduler.cancel()
+            return
+        }
+        // After a deal, give a short beat once the flip has already finished.
+        let delay: TimeInterval = afterBoardDeal ? 0.55 : 0.4
+        botScheduler.schedule(delay: delay) { [weak self] in
             self?.performBotTurn(playerID: id)
         }
+    }
+
+    private func noteBoardGrowthIfNeeded(previousCount: Int, holdingRank: HandRank?) {
+        let nextCount = state.board.compactMap { $0 }.count
+        guard nextCount > previousCount, state.phase == .playing else { return }
+        beginBoardReveal(holdingRank: holdingRank)
+    }
+
+    private func beginBoardReveal(holdingRank: HandRank?) {
+        if !isBoardRevealPending {
+            heldHeroHandRank = holdingRank
+        }
+        isBoardRevealPending = true
+        botScheduler.cancel()
+        armBoardRevealFallback()
+    }
+
+    private func finishBoardRevealAndContinue() {
+        isBoardRevealPending = false
+        heldHeroHandRank = nil
+        cancelBoardRevealFallback()
+
+        if state.phase == .playing,
+           state.handResult?.wentToShowdown == true {
+            let before = deferredShowdownBefore
+            let fromRemote = deferredShowdownFromRemote
+            deferredShowdownBefore = nil
+            deferredShowdownFromRemote = false
+            enterShowdown(before: before, fromRemotePoll: fromRemote)
+            return
+        }
+
+        deferredShowdownBefore = nil
+        deferredShowdownFromRemote = false
+        scheduleBotTurnIfNeeded(afterBoardDeal: true)
+    }
+
+    private func clearBoardRevealGate() {
+        isBoardRevealPending = false
+        heldHeroHandRank = nil
+        deferredShowdownBefore = nil
+        deferredShowdownFromRemote = false
+        cancelBoardRevealFallback()
+    }
+
+    private func armBoardRevealFallback() {
+        boardRevealFallbackTask?.cancel()
+        boardRevealFallbackTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(Self.boardRevealFallbackSeconds))
+            guard let self, !Task.isCancelled else { return }
+            self.boardRevealFinished()
+        }
+    }
+
+    private func cancelBoardRevealFallback() {
+        boardRevealFallbackTask?.cancel()
+        boardRevealFallbackTask = nil
     }
 
     private func scheduleBotShowIfNeeded() {
@@ -596,6 +737,7 @@ final class GameStore: ObservableObject {
 
     private func performBotTurn(playerID: String) {
         guard state.phase == .playing,
+              !isBoardRevealPending,
               state.activePlayerID == playerID,
               isBot(playerID) else { return }
         let legal = engine.legalActions(for: state, playerID: playerID)
@@ -643,6 +785,8 @@ final class GameStore: ObservableObject {
         let savedDeck        = state.remainingDeck
         let isNewHand        = state.handID != remote.handID
         let heroWasMissing   = !remote.players.contains(where: { $0.id == heroID })
+        let rankBefore       = state.heroHandRank
+        let boardBefore      = state.board.compactMap { $0 }.count
 
         state = remote
         state.heroID = heroID
@@ -654,6 +798,7 @@ final class GameStore: ObservableObject {
             } else if !savedHeroCards.isEmpty {
                 state.heroHoleCards = savedHeroCards
             }
+            clearBoardRevealGate()
         } else if !savedHeroCards.isEmpty {
             state.heroHoleCards = savedHeroCards
         }
@@ -672,6 +817,12 @@ final class GameStore: ObservableObject {
         engine.syncBettingUI(&state)
         engine.updateHeroDisplay(&state)
         GameLog.remoteStateMerged(state: state, heroRestored: heroWasMissing)
+
+        if state.phase == .playing {
+            noteBoardGrowthIfNeeded(previousCount: boardBefore, holdingRank: rankBefore)
+        } else {
+            clearBoardRevealGate()
+        }
 
         if isHost, engine.correctShowdownReveals(&state) {
             publishCurrentState()
@@ -710,11 +861,21 @@ final class GameStore: ObservableObject {
             return
         }
 
+        let pending = GameLog.ActionSnapshot.capture(
+            from: state,
+            playerID: state.activePlayerID ?? state.heroID ?? ""
+        )
+        let boardBefore = state.board.compactMap { $0 }.count
+        let rankBefore = state.heroHandRank
         guard engine.resolvePendingBettingRound(&state) else { return }
+        GameLog.logStreetResolved(before: pending, state: state)
+        noteBoardGrowthIfNeeded(previousCount: boardBefore, holdingRank: rankBefore)
         if state.handResult?.wentToShowdown == true {
             enterShowdown(fromRemotePoll: true)
         } else if state.activePlayerID == nil {
-            finalizeHandIfNeeded(fromRemotePoll: true)
+            if !engine.recoverStalledHand(&state) {
+                finalizeHandIfNeeded(fromRemotePoll: true)
+            }
         }
         publishCurrentState()
     }
@@ -795,7 +956,12 @@ final class GameStore: ObservableObject {
             publishCurrentState()
             return
         }
+        let pending = GameLog.ActionSnapshot.capture(
+            from: state,
+            playerID: state.activePlayerID ?? state.heroID ?? ""
+        )
         guard engine.recoverStalledHand(&state) else { return }
+        GameLog.logStreetResolved(before: pending, state: state)
         GameLog.snapshot(state, event: "recovered stalled hand")
         if state.handResult?.wentToShowdown == true {
             enterShowdown(fromRemotePoll: true)

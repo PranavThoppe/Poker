@@ -21,8 +21,11 @@ struct ResultsScreenView: View {
     let statsSectionTitle: String
     let buttonTitle: String
     let onButton: () -> Void
+    var buttonDetail: String? = nil
     var secondaryButtonTitle: String? = nil
     var onSecondaryButton: (() -> Void)? = nil
+    var tertiaryButtonTitle: String? = nil
+    var onTertiaryButton: (() -> Void)? = nil
     var readyStatusByPlayerID: [String: PlayerReadyStatus] = [:]
     var countdownStartedAt: Date? = nil
     var countdownDuration: TimeInterval = 5
@@ -54,7 +57,14 @@ struct ResultsScreenView: View {
                 Spacer()
 
                 VStack(spacing: Theme.Spacing.sm) {
-                    actionButton
+                    if let tertiaryButtonTitle, let onTertiaryButton {
+                        HStack(spacing: Theme.Spacing.sm) {
+                            actionButton
+                            sideActionButton(title: tertiaryButtonTitle, action: onTertiaryButton)
+                        }
+                    } else {
+                        actionButton
+                    }
                     if let secondaryButtonTitle, let onSecondaryButton {
                         Button(action: onSecondaryButton) {
                             Text(secondaryButtonTitle)
@@ -160,13 +170,35 @@ struct ResultsScreenView: View {
                     Capsule().fill(buttonFillColor)
                 }
 
-                Text(buttonTitle)
-                    .font(Theme.Font.actionLabel)
-                    .foregroundStyle(buttonTextColor)
+                HStack(spacing: Theme.Spacing.xs) {
+                    Text(buttonTitle)
+                        .font(Theme.Font.actionLabel)
+                        .foregroundStyle(buttonTextColor)
+
+                    if let buttonDetail {
+                        Text(buttonDetail)
+                            .font(Theme.Font.actionLabel)
+                            .foregroundStyle(buttonTextColor.opacity(0.6))
+                    }
+                }
             }
             .frame(maxWidth: .infinity)
             .frame(height: Theme.Size.actionPillH)
             .clipShape(Capsule())
+        }
+    }
+
+    private func sideActionButton(title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(Theme.Font.actionLabel)
+                .foregroundStyle(Theme.Color.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .frame(maxWidth: .infinity)
+                .frame(height: Theme.Size.actionPillH)
+                .background(Theme.Color.surface)
+                .clipShape(Capsule())
         }
     }
 }
@@ -189,11 +221,14 @@ struct StatsRow: View {
             AvatarView(player: player, size: Theme.Size.avatarSM)
                 .opacity(stat.isWinner ? 1 : 0.6)
 
-            Text(stat.name)
+            Text(displayName(stat.name, maxChars: 20))
                 .font(Theme.Font.playerName)
                 .foregroundStyle(stat.isWinner ? Theme.Color.primary : Theme.Color.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .layoutPriority(1)
 
-            Spacer()
+            Spacer(minLength: Theme.Spacing.sm)
 
             if let readyStatus {
                 readyPill(readyStatus)
@@ -207,33 +242,41 @@ struct StatsRow: View {
         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.tile))
     }
 
-    private func readyPill(_ status: PlayerReadyStatus) -> some View {
-        let label: String
-        let foreground: Color
-        let background: Color
+    private func displayName(_ name: String, maxChars: Int) -> String {
+        guard name.count > maxChars else { return name }
+        return String(name.prefix(maxChars - 1)) + "…"
+    }
 
+    @ViewBuilder
+    private func readyPill(_ status: PlayerReadyStatus) -> some View {
         switch status {
         case .ready:
-            label = "Ready"
-            foreground = Theme.Color.green
-            background = Theme.Color.green.opacity(0.15)
-        case .waiting:
-            label = "Waiting"
-            foreground = Theme.Color.secondary
-            background = Theme.Color.surfaceDeep
+            pillLabel(
+                "Ready",
+                foreground: Theme.Color.green,
+                background: Theme.Color.green.opacity(0.15)
+            )
         case .out:
-            label = "Out"
-            foreground = Theme.Color.secondary
-            background = Theme.Color.surfaceDeep
+            pillLabel(
+                "Out",
+                foreground: Theme.Color.secondary,
+                background: Theme.Color.surfaceDeep
+            )
+        case .waiting:
+            EmptyView()
         }
+    }
 
-        return Text(label)
+    private func pillLabel(_ label: String, foreground: Color, background: Color) -> some View {
+        Text(label)
             .font(.system(size: 11, weight: .semibold))
             .foregroundStyle(foreground)
+            .lineLimit(1)
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .background(background)
             .clipShape(Capsule())
+            .fixedSize(horizontal: true, vertical: false)
     }
 
     @ViewBuilder

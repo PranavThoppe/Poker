@@ -136,6 +136,17 @@ struct PokerEngine {
             }
         } else {
             advanceToNextPlayer(&state)
+            // Nobody else can put chips in (typically only all-ins remain). Close the
+            // street instead of leaving `activePlayerID` nil mid-hand.
+            if state.activePlayerID == nil {
+                if canResolveBettingRound {
+                    if anyoneCanAct(state) {
+                        recoverStalledHand(&state)
+                    } else {
+                        resolveCompletedBettingRound(&state)
+                    }
+                }
+            }
         }
 
         syncBettingUI(&state)
@@ -550,12 +561,16 @@ struct PokerEngine {
         }
     }
 
+    /// Resets everything that is scoped to a single street, including the turn pointer:
+    /// a new street always recomputes its own opener rather than inheriting the seat that
+    /// closed the previous one (which may have folded or moved all-in).
     private mutating func clearStreetBets(_ state: inout GameState) {
         for i in state.players.indices {
             state.players[i].currentBet = 0
         }
         state.streetBetLevel = 0
         state.actedThisStreet = []
+        state.activePlayerID = nil
     }
 
     private mutating func rotateDealer(_ state: inout GameState) {
@@ -655,17 +670,18 @@ struct PokerEngine {
             return true
         }
 
-        // Everyone left is all-in, so there is no decision to wait on.
-        if !active.contains(where: { canAct($0, state) }) { return true }
+        // Only seats that can still put chips in need to act. All-in players must not
+        // keep the round open if they were never copied into `actedThisStreet`.
+        let actors = active.filter { canAct($0, state) }
+        if actors.isEmpty { return true }
 
         let level = state.streetBetLevel
-        for idx in active {
-            let p = state.players[idx]
-            if p.currentBet < level && p.stack > 0 { return false }
+        for idx in actors {
+            if state.players[idx].currentBet < level { return false }
         }
 
-        let activeIDs = Set(active.map { state.players[$0].id })
-        return activeIDs.isSubset(of: Set(state.actedThisStreet))
+        let actorIDs = Set(actors.map { state.players[$0].id })
+        return actorIDs.isSubset(of: Set(state.actedThisStreet))
     }
 
     private mutating func markActed(_ state: inout GameState, playerID: String) {
@@ -689,12 +705,57 @@ struct PokerEngine {
         }
     }
 
-    private mutating func resolveCompletedBettingRound(_ state: inout GameState) {
-        if state.bettingRound == .river {
-            resolveShowdown(&state)
-        } else {
-            advanceStreet(&state)
+    private func anyoneCanAct(_ state: GameState) -> Bool {
+        state.players.indices.contains { canAct($0, state) }
+    }
+
+    /// Puts the action on the opening seat for a street: first live seat left of the button,
+    /// falling back to any seat that can still bet. Nil only when everyone left is all-in.
+    private mutating func openStreet(_ state: inout GameState) {
+        state.activePlayerID = nil
+        setFirstToAct(&state, preFlop: false)
+        if state.activePlayerID == nil,
+           let idx = state.players.indices.first(where: { canAct($0, state) }) {
+            state.activePlayerID = state.players[idx].id
         }
+    }
+
+    /// Recovery only: re-opens a street whose pointer was lost (a dropped sync write or a
+    /// client relaunched mid-hand). Never takes the turn away from a live actor.
+    private mutating func ensureStreetHasActor(_ state: inout GameState) {
+        guard state.activePlayerID == nil else { return }
+        openStreet(&state)
+    }
+
+    private mutating func resolveCompletedBettingRound(_ state: inout GameState) {
+        guard state.bettingRound == .river else {
+            advanceStreet(&state)
+            return
+        }
+
+        // The river gets a betting round like every other street. Cards are only compared
+        // once it closes, or when nobody left has chips to put in.
+        if anyoneCanAct(state), !isBettingRoundComplete(&state) {
+            ensureStreetHasActor(&state)
+            return
+        }
+
+        #if DEBUG
+        assert(
+            state.board.compactMap { $0 }.count == 5,
+            "showdown with an incomplete board"
+        )
+        let owed = state.players.indices.filter {
+            canAct($0, state) && !state.actedThisStreet.contains(state.players[$0].id)
+        }
+        assert(
+            owed.isEmpty,
+            "showdown while \(owed.count) player(s) still owe a river action: "
+                + owed.map { state.players[$0].id }.joined(separator: ",")
+        )
+        #endif
+
+        resolveShowdown(&state)
     }
 
     /// Rebuilds the deck from cards not already in play. Recovers hands where the host lost
@@ -718,6 +779,7 @@ struct PokerEngine {
     }
 
     private mutating func advanceStreet(_ state: inout GameState) {
+        guard state.bettingRound != .river else { return }
         clearStreetBets(&state)
         markAllInPlayersActed(&state)
         // Burn card plus up to three community cards.
@@ -747,11 +809,12 @@ struct PokerEngine {
         }
 
         state.remainingDeck = deck.saveRemaining()
-        setFirstToAct(&state, preFlop: false)
+        openStreet(&state)
 
-        // Nobody can act (all remaining players are all-in): run the rest of the board out
-        // rather than leaving the table with no active player.
-        if state.activePlayerID == nil {
+        // Every remaining player is all-in, so there is no decision left: run the rest of
+        // the board out. Keyed on chips rather than on the pointer, so a stale pointer can
+        // neither suppress the runout nor stand in for a real betting round.
+        if !anyoneCanAct(state) {
             resolveCompletedBettingRound(&state)
         }
     }

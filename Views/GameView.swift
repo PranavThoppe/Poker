@@ -38,8 +38,10 @@ struct GameView: View {
                     board: store.state.board,
                     pot: store.state.pot,
                     streetLabel: store.state.bettingRound.displayName,
-                    isRevealing: $isBoardRevealing
+                    isRevealing: $isBoardRevealing,
+                    onRevealFinished: { store.boardRevealFinished() }
                 )
+                .id("playing-board")
 
                 Spacer()
 
@@ -49,12 +51,11 @@ struct GameView: View {
                     maximumRaiseAmount: maximumRaiseAmount,
                     raiseIncrement: PokerEngine.smallBlind,
                     canRaise: canRaise,
-                    isHeroTurn: store.isHeroTurn && !isBoardRevealing,
+                    isHeroTurn: store.isHeroTurn && !isBoardRevealing && !store.isBoardRevealPending,
                     onCheck: { store.check() },
                     onCall: { store.call() },
                     onRaise: { store.raise($0) },
-                    onFold: { store.fold() },
-                    onFinishGame: { store.endGame() }
+                    onFold: { store.fold() }
                 )
                 .padding(.horizontal, Theme.Spacing.md)
 
@@ -62,7 +63,7 @@ struct GameView: View {
 
                 HeroRow(
                     holeCards: store.state.heroHoleCards,
-                    handRank: store.state.heroHandRank,
+                    handRank: store.displayedHeroHandRank,
                     heroID: store.state.heroID,
                     players: store.state.players
                 )
@@ -137,10 +138,11 @@ struct BoardView: View {
     var streetLabel: String? = nil
     var highlightedCardIDs: Set<String>? = nil
     @Binding var isRevealing: Bool
+    /// Fired when a flip cycle ends, or when new cards were already face-up (nothing to animate).
+    var onRevealFinished: (() -> Void)? = nil
 
     /// Face-up flags lag the engine board so new cards can flip in.
     @State private var isFaceUp = Array(repeating: false, count: 5)
-    @State private var revealTask: Task<Void, Never>?
     @State private var hasSyncedInitialBoard = false
 
     private static let flipDuration: TimeInterval = 0.45
@@ -172,24 +174,17 @@ struct BoardView: View {
                 .padding(.trailing, Theme.Spacing.xs)
         }
         .padding(.horizontal, Theme.Spacing.md)
-        .onAppear {
-            guard !hasSyncedInitialBoard else { return }
-            hasSyncedInitialBoard = true
-            // Cold start / rejoin: show already-dealt cards without replaying flips.
-            syncReveals(animated: false)
-        }
-        .onChange(of: boardSignature) { _ in
-            guard hasSyncedInitialBoard else { return }
-            syncReveals(animated: true)
+        // Restart whenever the dealt board changes. Cancellation snaps any still-hidden
+        // cards face-up so a mid-flip interrupt can never leave the street face-down.
+        .task(id: boardSignature) {
+            await syncBoardFaceUp()
         }
         .onDisappear {
-            revealTask?.cancel()
-            revealTask = nil
             isRevealing = false
         }
     }
 
-    /// Stable identity for board contents so `onChange` fires when cards appear/clear.
+    /// Stable identity for board contents so the reveal task restarts when cards appear/clear.
     private var boardSignature: String {
         board.map { $0?.id ?? "_" }.joined(separator: "|")
     }
@@ -199,9 +194,8 @@ struct BoardView: View {
         return highlightedCardIDs.contains(card.id) ? 1 : 0.35
     }
 
-    private func syncReveals(animated: Bool) {
-        revealTask?.cancel()
-
+    @MainActor
+    private func syncBoardFaceUp() async {
         for i in 0..<5 {
             if (board[safe: i] ?? nil) == nil {
                 isFaceUp[i] = false
@@ -212,32 +206,45 @@ struct BoardView: View {
             (board[safe: i] ?? nil) != nil && !isFaceUp[i]
         }
 
+        let shouldAnimate = hasSyncedInitialBoard
+        hasSyncedInitialBoard = true
+
         guard !pending.isEmpty else {
             isRevealing = false
+            onRevealFinished?()
             return
         }
 
-        if !animated {
+        // Cold start / rejoin: show already-dealt cards without replaying flips.
+        guard shouldAnimate else {
             for i in pending { isFaceUp[i] = true }
             isRevealing = false
+            onRevealFinished?()
             return
         }
 
         isRevealing = true
-        revealTask = Task { @MainActor in
-            for (offset, index) in pending.enumerated() {
-                if offset > 0 {
-                    try? await Task.sleep(nanoseconds: UInt64(Self.staggerDelay * 1_000_000_000))
-                }
-                guard !Task.isCancelled else { return }
-                withAnimation(.easeInOut(duration: Self.flipDuration)) {
-                    isFaceUp[index] = true
-                }
+        defer {
+            // Always finish face-up for every dealt seat — including when this task is
+            // cancelled because a newer board signature arrived.
+            for i in 0..<5 where (board[safe: i] ?? nil) != nil {
+                isFaceUp[i] = true
             }
-            try? await Task.sleep(nanoseconds: UInt64(Self.flipDuration * 1_000_000_000))
-            guard !Task.isCancelled else { return }
             isRevealing = false
+            onRevealFinished?()
         }
+
+        for (offset, index) in pending.enumerated() {
+            if Task.isCancelled { return }
+            if offset > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(Self.staggerDelay * 1_000_000_000))
+            }
+            if Task.isCancelled { return }
+            withAnimation(.easeInOut(duration: Self.flipDuration)) {
+                isFaceUp[index] = true
+            }
+        }
+        try? await Task.sleep(nanoseconds: UInt64(Self.flipDuration * 1_000_000_000))
     }
 }
 
@@ -254,7 +261,6 @@ struct ActionBarView: View {
     let onCall: () -> Void
     let onRaise: (Int) -> Void
     let onFold: () -> Void
-    let onFinishGame: () -> Void
 
     @State private var showOptions = false
     @State private var showRaiseCustomization = false
@@ -338,7 +344,6 @@ struct ActionBarView: View {
         .opacity(actionsEnabled ? 1 : 0.4)
         .confirmationDialog("More Options", isPresented: $showOptions, titleVisibility: .hidden) {
             Button("Fold", role: .destructive) { onFold() }
-            Button("Finish game (test)") { onFinishGame() }
             Button("Cancel", role: .cancel) {}
         }
     }

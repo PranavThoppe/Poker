@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// Synced showdown table: live players in reveal order, Show with an 8s countdown, then the
-/// winner decides when to move the table on to the hand summary. Practice skips the Continue
-/// countdown and always lets the human advance.
+/// winner taps Continue to move on to the hand summary (host keeps a silent safety timeout).
+/// Practice always lets the human advance with no auto-continue.
 struct ShowdownRevealView: View {
     @EnvironmentObject var store: GameStore
 
@@ -10,7 +10,6 @@ struct ShowdownRevealView: View {
     private static let flipDuration: TimeInterval = 0.45
 
     @State private var countdownStartedAt: Date?
-    @State private var advanceStartedAt: Date?
     @State private var isBoardRevealing = false
     @State private var faceUpPlayerIDs: Set<String> = []
 
@@ -119,17 +118,6 @@ struct ShowdownRevealView: View {
             guard store.state.phase == .showdown, store.isHeroTurn else { return }
             store.showCards()
         }
-        .task(id: store.isHeroShowdownDecider) {
-            guard !isPractice, store.isHeroShowdownDecider else {
-                advanceStartedAt = nil
-                return
-            }
-            advanceStartedAt = Date()
-            try? await Task.sleep(for: .seconds(GameStore.showdownAdvanceSeconds))
-            guard !Task.isCancelled else { return }
-            guard store.state.phase == .showdown, store.isHeroShowdownDecider else { return }
-            store.advanceToHandSummary(auto: true)
-        }
     }
 
     private var revealedPlayerIDs: Set<String> {
@@ -154,7 +142,7 @@ struct ShowdownRevealView: View {
             if canHeroContinue {
                 countdownButton(
                     title: "Continue",
-                    startedAt: isPractice ? nil : advanceStartedAt,
+                    startedAt: nil,
                     duration: GameStore.showdownAdvanceSeconds,
                     action: { store.advanceToHandSummary() }
                 )

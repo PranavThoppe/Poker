@@ -48,6 +48,13 @@ enum GameMode: String, Codable, Equatable {
     case practiceVsCPU   // local; bots added in Phase 2
 }
 
+/// Why a session ended. Used for win credit and the manual-finish tie flow.
+enum GameEndReason: String, Codable, Equatable {
+    case autoLastStanding
+    case manualFinish
+    case manualFinishTieForfeit
+}
+
 // MARK: - Game phases & actions
 
 enum GamePhase: Codable, Equatable {
@@ -174,6 +181,10 @@ struct GameState: Codable {
     var callAmount: Int = 0
     var raiseAmount: Int = 0
     var endStats: [PlayerStats] = []
+    /// Completed hands this session (synced for win-floor gating).
+    var completedHandCount: Int = 0
+    /// Shared across devices when manual Finish is attempted while chip counts are tied.
+    var manualFinishTieAttempts: Int = 0
 
     // Engine-owned fields (local session; not in message URL)
     var holeCardsByPlayer: [String: [Card]] = [:]

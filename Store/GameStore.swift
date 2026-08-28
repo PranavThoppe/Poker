@@ -4,6 +4,7 @@ import Combine
 @MainActor
 final class GameStore: ObservableObject {
     @Published var state: GameState
+    @Published var showManualFinishTieWarning = false
 
     /// Sync backend; replaced with `SupabaseSync()` for classic multiplayer sessions.
     var syncer: GameSyncing = MockSync()
@@ -266,13 +267,43 @@ final class GameStore: ObservableObject {
 
     // MARK: - End game / navigation
 
-    func endGame() {
+    func requestManualEndGame() {
+        guard state.phase == .handSummary else { return }
+        if isChipTiedAmongActiveHumans() {
+            if state.manualFinishTieAttempts == 0 {
+                state.manualFinishTieAttempts += 1
+                showManualFinishTieWarning = true
+                publishCurrentState()
+                return
+            }
+            endGame(reason: .manualFinishTieForfeit)
+            return
+        }
+        endGame(reason: .manualFinish)
+    }
+
+    func dismissManualFinishTieWarning() {
+        showManualFinishTieWarning = false
+    }
+
+    func endGame(reason: GameEndReason = .manualFinish) {
         clearBoardRevealGate()
         let previousPhase = state.phase
         state.phase = .ended
-        state.endStats = buildStats()
+        state.endStats = buildStats(reason: reason)
         GameLog.phaseChanged(from: previousPhase, to: .ended, state: state)
         GameLog.gameEnded(state: state)
+
+        let humanCount = state.players.filter { !$0.isBot }.count
+        WinStatsService.shared.recordGameWinIfEligible(
+            gameID: state.gameID,
+            gameMode: state.gameMode,
+            endStats: state.endStats,
+            endReason: reason,
+            humanCount: humanCount,
+            completedHands: state.completedHandCount
+        )
+
         publishCurrentState()
     }
 
@@ -286,7 +317,7 @@ final class GameStore: ObservableObject {
             guard sessionEndsAfterHandSummary || allReadyForNextHand else { return }
         }
         if engine.shouldEndGame(state) {
-            endGame()
+            endGame(reason: .autoLastStanding)
         } else {
             engine.startHand(&state)
             let previousPhase = state.phase
@@ -512,6 +543,7 @@ final class GameStore: ObservableObject {
         botScheduler.cancel()
         state.endStats = buildHandSummaryStats()
         let previousPhase = state.phase
+        markHandCompletedIfNeeded(previousPhase: previousPhase)
         resetReadyStateForHandSummary()
         state.phase = .handSummary
         GameLog.phaseChanged(from: previousPhase, to: .handSummary, state: state)
@@ -592,6 +624,7 @@ final class GameStore: ObservableObject {
         botScheduler.cancel()
         clearBoardRevealGate()
         let previousPhase = state.phase
+        markHandCompletedIfNeeded(previousPhase: previousPhase)
         resetReadyStateForHandSummary()
         state.phase = .handSummary
         GameLog.phaseChanged(from: previousPhase, to: .handSummary, state: state)
@@ -1097,21 +1130,22 @@ final class GameStore: ObservableObject {
         .sorted { $0.finalStack > $1.finalStack }
     }
 
-    private func buildStats() -> [PlayerStats] {
-        let survivors = state.players.filter { !$0.isEliminated && $0.stack > 0 }
+    private func buildStats(reason: GameEndReason) -> [PlayerStats] {
         let winnerID: String?
-        if survivors.count == 1 {
-            winnerID = survivors[0].id
-        } else if let leader = state.players.max(by: { $0.stack < $1.stack }) {
-            let topStack = leader.stack
-            let tied = state.players.filter { $0.stack == topStack }
-            if tied.count > 1, let heroID = state.heroID, tied.contains(where: { $0.id == heroID }) {
-                winnerID = heroID
-            } else {
-                winnerID = leader.id
-            }
-        } else {
+        switch reason {
+        case .manualFinishTieForfeit:
             winnerID = nil
+        case .autoLastStanding:
+            let survivors = state.players.filter { !$0.isEliminated && $0.stack > 0 }
+            winnerID = survivors.count == 1 ? survivors[0].id : nil
+        case .manualFinish:
+            let active = state.players.filter { !$0.isEliminated && $0.stack > 0 }
+            if let topStack = active.map(\.stack).max() {
+                let leaders = active.filter { $0.stack == topStack }
+                winnerID = leaders.count == 1 ? leaders[0].id : nil
+            } else {
+                winnerID = nil
+            }
         }
 
         return state.players.map { p in
@@ -1128,6 +1162,29 @@ final class GameStore: ObservableObject {
             )
         }
         .sorted { $0.finalStack > $1.finalStack }
+    }
+
+    private var activeHumans: [Player] {
+        state.players.filter { !$0.isBot && !$0.isEliminated && $0.stack > 0 }
+    }
+
+    private func isChipTiedAmongActiveHumans() -> Bool {
+        let humans = activeHumans
+        guard let topStack = humans.map(\.stack).max() else { return false }
+        return humans.filter { $0.stack == topStack }.count > 1
+    }
+
+    private func markHandCompletedIfNeeded(previousPhase: GamePhase) {
+        guard previousPhase != .handSummary, previousPhase != .ended else { return }
+        state.completedHandCount += 1
+        syncManualFinishTieAttempts()
+    }
+
+    private func syncManualFinishTieAttempts() {
+        guard state.manualFinishTieAttempts > 0 else { return }
+        if !isChipTiedAmongActiveHumans() {
+            state.manualFinishTieAttempts = 0
+        }
     }
 }
 

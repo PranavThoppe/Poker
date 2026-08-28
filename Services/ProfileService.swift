@@ -24,6 +24,7 @@ final class ProfileService: ObservableObject {
 
     private init() {
         profile = loadLocal()
+        Task { await WinStatsService.shared.reconcileWithRemote() }
     }
 
     // MARK: - UserDefaults persistence
@@ -56,6 +57,8 @@ final class ProfileService: ObservableObject {
         try await upsertProfile(body: body)
         persistLocal(name: name, avatarIndex: avatarIndex)
         profile = LocalProfile(id: Self.deviceID, displayName: name, avatarIndex: avatarIndex)
+        // Profile row must exist before `game_win_credits` FK inserts can succeed.
+        await WinStatsService.shared.reconcileWithRemote()
     }
 
     private func upsertProfile(body: [String: Any]) async throws {

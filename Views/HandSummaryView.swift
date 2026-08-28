@@ -87,12 +87,19 @@ struct HandSummaryView: View {
             secondaryButtonTitle: canStartNextHand ? "Next Hand" : nil,
             onSecondaryButton: { continueIfNeeded() },
             tertiaryButtonTitle: "Finish Game",
-            onTertiaryButton: { store.endGame() },
+            onTertiaryButton: { store.requestManualEndGame() },
             readyStatusByPlayerID: readyStatusByPlayerID,
             buttonFillColor: Theme.Color.green,
             buttonTrackColor: Theme.Color.green.opacity(0.25),
             buttonTextColor: Theme.Color.primary
         )
+        .alert("There can only be 1 winner", isPresented: $store.showManualFinishTieWarning) {
+            Button("Continue", role: .cancel) {
+                store.dismissManualFinishTieWarning()
+            }
+        } message: {
+            Text("Players are tied for the most chips. Keep playing to break the tie.")
+        }
     }
 
     private func primaryAction() {

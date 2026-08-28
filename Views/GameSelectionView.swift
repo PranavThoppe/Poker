@@ -4,6 +4,7 @@ struct GameSelectionView: View {
     var onClassicSend: () -> Void
     var onPracticePlay: () -> Void
 
+    @ObservedObject private var winStats = WinStatsService.shared
     @State private var selectedMode: GameMode?
 
     private let upcomingModeCount = 3
@@ -74,7 +75,8 @@ struct GameSelectionView: View {
             title: "Classic Poker",
             subtitle: "Texas hold'em",
             isSelected: selectedMode == .classicPoker,
-            isEnabled: true
+            isEnabled: true,
+            lifetimeWins: winStats.lifetimeWins
         ) {
             selectedMode = selectedMode == .classicPoker ? nil : .classicPoker
         }
@@ -119,6 +121,7 @@ struct GameSelectionView: View {
         subtitle: String?,
         isSelected: Bool,
         isEnabled: Bool,
+        lifetimeWins: Int? = nil,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -144,10 +147,21 @@ struct GameSelectionView: View {
 
                 Spacer(minLength: 0)
 
-                if isSelected {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 22))
-                        .foregroundStyle(Theme.Color.green)
+                HStack(spacing: Theme.Spacing.sm) {
+                    if isSelected {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 22))
+                            .foregroundStyle(Theme.Color.green)
+                    }
+                    if let lifetimeWins, lifetimeWins > 0 {
+                        HStack(spacing: 4) {
+                            Image(systemName: "trophy.fill")
+                                .font(.system(size: 14, weight: .semibold))
+                            Text("\(lifetimeWins)")
+                                .font(Theme.Font.subhead)
+                        }
+                        .foregroundStyle(Theme.Color.chipYellow)
+                    }
                 }
             }
             .padding(Theme.Spacing.md)

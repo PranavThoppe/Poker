@@ -10,7 +10,7 @@ struct OnboardingView: View {
     @State private var selectedAvatarIndex: Int? = nil
     @State private var isSaving: Bool = false
     @State private var isShuffling: Bool = false
-    @State private var spinResults: [Int] = []   // stores final index of each completed spin
+    @State private var hasShuffled: Bool = false
     @State private var errorMessage: String? = nil
 
     private let avatarCount = 30
@@ -64,63 +64,32 @@ struct OnboardingView: View {
 
     private var selectedAvatarPreview: some View {
         VStack(spacing: Theme.Spacing.sm) {
-            if spinResults.count < 2 {
-                // Spinning phase — empty until first spin, then live avatar
-                if spinResults.isEmpty && !isShuffling {
-                    emptyAvatarPlaceholder(size: 80)
-                } else if let index = selectedAvatarIndex {
-                    AvatarView(
-                        player: previewPlayer(avatarIndex: index),
-                        size: 80
-                    )
-                }
-
-                Button(action: startShuffle) {
-                    Label(spinResults.count == 1 ? "1 more spin" : "Shuffle", systemImage: "shuffle")
-                        .font(Theme.Font.subhead)
-                        .foregroundStyle(isShuffling ? Theme.Color.secondary : Theme.Color.primary)
-                        .padding(.horizontal, Theme.Spacing.lg)
-                        .frame(height: 40)
-                        .background(Theme.Color.surface)
-                        .clipShape(Capsule())
-                        .overlay(
-                            Capsule()
-                                .strokeBorder(Theme.Color.secondary.opacity(0.35), lineWidth: 1)
-                        )
-                }
-                .buttonStyle(.plain)
-                .disabled(isShuffling)
-                .opacity(isShuffling ? 0.6 : 1)
-                .padding(.top, Theme.Spacing.sm)
-            } else {
-                // Both spins done — let the user pick between the two results
-                Text("Pick your avatar")
-                    .font(Theme.Font.body)
-                    .foregroundStyle(Theme.Color.secondary)
-
-                HStack(spacing: Theme.Spacing.xl) {
-                    ForEach(spinResults.indices, id: \.self) { i in
-                        let index = spinResults[i]
-                        let isChosen = selectedAvatarIndex == index
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.15)) {
-                                selectedAvatarIndex = index
-                            }
-                        } label: {
-                            AvatarView(player: previewPlayer(avatarIndex: index), size: 72)
-                                .padding(6)
-                                .background(
-                                    Circle()
-                                        .strokeBorder(
-                                            isChosen ? Theme.Color.primary : Color.clear,
-                                            lineWidth: 2.5
-                                        )
-                                )
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
+            if !hasShuffled && !isShuffling {
+                emptyAvatarPlaceholder(size: 80)
+            } else if let index = selectedAvatarIndex {
+                AvatarView(
+                    player: previewPlayer(avatarIndex: index),
+                    size: 80
+                )
             }
+
+            Button(action: startShuffle) {
+                Label(hasShuffled ? "Shuffle again" : "Shuffle", systemImage: "shuffle")
+                    .font(Theme.Font.subhead)
+                    .foregroundStyle(isShuffling ? Theme.Color.secondary : Theme.Color.primary)
+                    .padding(.horizontal, Theme.Spacing.lg)
+                    .frame(height: 40)
+                    .background(Theme.Color.surface)
+                    .clipShape(Capsule())
+                    .overlay(
+                        Capsule()
+                            .strokeBorder(Theme.Color.secondary.opacity(0.35), lineWidth: 1)
+                    )
+            }
+            .buttonStyle(.plain)
+            .disabled(isShuffling)
+            .opacity(isShuffling ? 0.6 : 1)
+            .padding(.top, Theme.Spacing.sm)
         }
     }
 
@@ -219,7 +188,7 @@ struct OnboardingView: View {
     // MARK: - Helpers
 
     private func startShuffle() {
-        guard !isShuffling, spinResults.count < 2 else { return }
+        guard !isShuffling else { return }
         isShuffling = true
         // Intervals grow progressively — fast at first, then slow to a stop.
         let intervals: [Double] = [0.05, 0.05, 0.06, 0.08, 0.10, 0.13, 0.17, 0.22, 0.28, 0.36]
@@ -234,16 +203,14 @@ struct OnboardingView: View {
                     selectedAvatarIndex = next
                 }
             }
-            if let finalIndex = selectedAvatarIndex {
-                spinResults.append(finalIndex)
-            }
+            hasShuffled = selectedAvatarIndex != nil
             isShuffling = false
         }
     }
 
     private var canSave: Bool {
         !displayName.trimmingCharacters(in: .whitespaces).isEmpty
-            && spinResults.count >= 2
+            && hasShuffled
             && selectedAvatarIndex != nil
     }
 

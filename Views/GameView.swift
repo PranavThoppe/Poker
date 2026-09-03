@@ -65,7 +65,8 @@ struct GameView: View {
                     holeCards: store.state.heroHoleCards,
                     handRank: store.displayedHeroHandRank,
                     heroID: store.state.heroID,
-                    players: store.state.players
+                    players: store.state.players,
+                    isDealing: store.isWaitingForHoleCards
                 )
                 .padding(.horizontal, Theme.Spacing.md)
 
@@ -480,6 +481,7 @@ struct HeroRow: View {
     let handRank: HandRank?
     let heroID: String?
     let players: [Player]
+    var isDealing: Bool = false
 
     private var hero: Player? {
         guard let id = heroID else { return nil }
@@ -488,7 +490,7 @@ struct HeroRow: View {
 
     var body: some View {
         HStack(spacing: Theme.Spacing.md) {
-            HoleCardsView(cards: holeCards)
+            HoleCardsView(cards: holeCards, isDealing: isDealing)
             if let hero {
                 HandSummaryCard(player: hero, handRank: handRank)
                     .padding(.leading, 15)
@@ -535,21 +537,31 @@ private struct HeroSideButtons: View {
 
 struct HoleCardsView: View {
     let cards: [Card]
+    var isDealing: Bool = false
 
     /// Horizontal offset so the back card’s center suit stays visible beside the front card.
     private let spread: CGFloat = 30
 
     var body: some View {
         ZStack {
-            if cards.count > 0 {
-                CardView(card: cards[0], width: Theme.Size.holeCardW, height: Theme.Size.holeCardH)
+            if isDealing && cards.isEmpty {
+                CardBackView(width: Theme.Size.holeCardW, height: Theme.Size.holeCardH)
                     .rotationEffect(.degrees(-6))
                     .offset(x: -spread, y: 4)
-            }
-            if cards.count > 1 {
-                CardView(card: cards[1], width: Theme.Size.holeCardW, height: Theme.Size.holeCardH)
+                CardBackView(width: Theme.Size.holeCardW, height: Theme.Size.holeCardH)
                     .rotationEffect(.degrees(4))
                     .offset(x: spread, y: -4)
+            } else {
+                if cards.count > 0 {
+                    CardView(card: cards[0], width: Theme.Size.holeCardW, height: Theme.Size.holeCardH)
+                        .rotationEffect(.degrees(-6))
+                        .offset(x: -spread, y: 4)
+                }
+                if cards.count > 1 {
+                    CardView(card: cards[1], width: Theme.Size.holeCardW, height: Theme.Size.holeCardH)
+                        .rotationEffect(.degrees(4))
+                        .offset(x: spread, y: -4)
+                }
             }
         }
         .frame(

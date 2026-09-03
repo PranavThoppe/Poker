@@ -42,6 +42,24 @@ struct SupabaseClient {
         try validate(response)
     }
 
+    // MARK: - DELETE
+
+    func delete(path: String, query: [String: String] = [:]) async throws {
+        guard var components = URLComponents(string: SupabaseConstants.projectURL + "/rest/v1/" + path) else {
+            throw URLError(.badURL)
+        }
+        if !query.isEmpty {
+            components.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) }
+        }
+        guard let url = components.url else { throw URLError(.badURL) }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        applyHeaders(to: &request)
+        let (_, response) = try await session.data(for: request)
+        try validate(response)
+    }
+
     // MARK: - POST / Upsert
 
     /// POSTs a JSON body with `Prefer: resolution=merge-duplicates` — upserts on conflict.

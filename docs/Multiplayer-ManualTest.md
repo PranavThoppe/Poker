@@ -4,7 +4,7 @@ Run a **Debug** build on two devices or simulators with different device IDs. Us
 
 Logs must use stable player IDs only. Do not include display names or private hole cards.
 
-**Supabase setup:** run [`docs/supabase-debug-log.sql`](supabase-debug-log.sql) in the Supabase SQL editor before testing. Events append to `game_rooms.debug_log` (newest 1,000 kept). Inspect with:
+**Supabase setup:** run [`docs/supabase-debug-log.sql`](supabase-debug-log.sql) and [`docs/supabase-hole-cards-hand-id.sql`](supabase-hole-cards-hand-id.sql) in the Supabase SQL editor before testing. Events append to `game_rooms.debug_log` (newest 1,000 kept). Inspect with:
 
 ```sql
 SELECT id, jsonb_array_length(debug_log) AS events, debug_log
@@ -272,8 +272,9 @@ Repeat hands as needed to cover every action.
 | 4 | Background the guest, act on host, then reopen guest | ☐ | Guest catches up to the latest state without overwriting it. |
 | 5 | Disconnect the guest, act on host, then reconnect | ☐ | Fetch/publish failures are logged and the guest eventually merges current state. |
 | 6 | Let the guest make the final river action | ☐ | `showdownDeferredToHost`, followed by `showdownResolvedByHost`; pot awarded once. |
-| 7 | Start another hand | ☐ | Old hole cards are not displayed; each player fetches exactly two new cards. |
+| 7 | Start another hand | ☐ | Old hole cards are not displayed; each active player fetches exactly two new cards; eliminated players see no private cards. |
 | 8 | Reopen the same bubble | ☐ | The existing room opens; no duplicate player and no fresh room are created. |
+| 9 | Third player joins, then host starts | ☐ | All three names appear on the host waiting screen before Start; each device gets `holeCardsFetched`. |
 
 ## Sign-off
 

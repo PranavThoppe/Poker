@@ -86,51 +86,90 @@ final class SupabaseSync: GameSyncing {
         GameLog.subscriptionStopped(roomID: roomID)
     }
 
+    /// One-shot read of the current room row. The host uses this before dealing so every
+    /// joined guest is in `players` before cards are written.
+    func fetchGameRoom(roomID: String) async throws -> (GameState, String?) {
+        let rows: [GameRoomRow] = try await SupabaseClient.shared.get(
+            path: "game_rooms",
+            query: ["id": "eq.\(roomID)", "select": Self.pollSelect]
+        )
+        guard let row = rows.first else { throw URLError(.fileDoesNotExist) }
+        return (row.publicState, row.hostID)
+    }
+
     // MARK: - Hole cards (called directly by GameStore)
 
     /// Host writes each player's private hole cards after dealing.
-    func upsertHoleCards(roomID: String, playerID: String, cards: [Card]) async throws {
+    func upsertHoleCards(
+        roomID: String,
+        playerID: String,
+        handID: UUID,
+        cards: [Card]
+    ) async throws {
         struct Payload: Encodable {
             let room_id: String
             let player_id: String
+            let hand_id: UUID
             let cards: [Card]
         }
         try await SupabaseClient.shared.upsert(
             path: "player_hole_cards",
-            body: Payload(room_id: roomID, player_id: playerID, cards: cards)
+            body: Payload(room_id: roomID, player_id: playerID, hand_id: handID, cards: cards)
+        )
+    }
+
+    /// Removes every private-card row for the room before a new deal is written.
+    func deleteAllHoleCards(roomID: String) async throws {
+        try await SupabaseClient.shared.delete(
+            path: "player_hole_cards",
+            query: ["room_id": "eq.\(roomID)"]
         )
     }
 
     /// Guest fetches their own hole cards after the host has dealt.
-    func fetchHoleCards(roomID: String, playerID: String) async throws -> [Card]? {
-        struct Row: Decodable { let cards: [Card] }
-        let rows: [Row] = try await SupabaseClient.shared.get(
-            path: "player_hole_cards",
-            query: [
-                "room_id":  "eq.\(roomID)",
-                "player_id": "eq.\(playerID)",
-                "select":   "cards"
-            ]
-        )
-        return rows.first?.cards
-    }
-
-    /// Host recovery: re-reads every seat's cards so a relaunched host can still run a showdown.
-    func fetchAllHoleCards(roomID: String) async throws -> [String: [Card]] {
+    func fetchHoleCards(roomID: String, playerID: String, handID: UUID) async throws -> [Card]? {
         struct Row: Decodable {
-            let playerID: String
+            let handID: UUID?
             let cards: [Card]
 
             enum CodingKeys: String, CodingKey {
-                case playerID = "player_id"
+                case handID = "hand_id"
                 case cards
             }
         }
         let rows: [Row] = try await SupabaseClient.shared.get(
             path: "player_hole_cards",
-            query: ["room_id": "eq.\(roomID)", "select": "player_id,cards"]
+            query: [
+                "room_id":  "eq.\(roomID)",
+                "player_id": "eq.\(playerID)",
+                "select":   "hand_id,cards"
+            ]
         )
-        return Dictionary(rows.map { ($0.playerID, $0.cards) }, uniquingKeysWith: { $1 })
+        guard let row = rows.first, row.handID == handID else { return nil }
+        return row.cards
+    }
+
+    /// Host recovery: re-reads every seat's cards so a relaunched host can still run a showdown.
+    func fetchAllHoleCards(roomID: String, handID: UUID) async throws -> [String: [Card]] {
+        struct Row: Decodable {
+            let playerID: String
+            let handID: UUID?
+            let cards: [Card]
+
+            enum CodingKeys: String, CodingKey {
+                case playerID = "player_id"
+                case handID = "hand_id"
+                case cards
+            }
+        }
+        let rows: [Row] = try await SupabaseClient.shared.get(
+            path: "player_hole_cards",
+            query: ["room_id": "eq.\(roomID)", "select": "player_id,hand_id,cards"]
+        )
+        return Dictionary(
+            rows.filter { $0.handID == handID }.map { ($0.playerID, $0.cards) },
+            uniquingKeysWith: { $1 }
+        )
     }
 
     // MARK: - Private

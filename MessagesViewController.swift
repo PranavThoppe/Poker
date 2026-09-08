@@ -88,6 +88,7 @@ class MessagesViewController: MSMessagesAppViewController {
             return
         }
         guard allowDeferredSelection else {
+            extensionHost.gameStore.stopSession()
             extensionHost.route = ProfileService.shared.loadLocal() == nil ? .onboarding : .gameSelection
             applyPresentationStyleForCurrentRoute()
             return
@@ -119,16 +120,19 @@ class MessagesViewController: MSMessagesAppViewController {
 
     private func openGame(from url: URL, conversation: MSConversation) {
         guard let gameState = GameStore.decode(from: url) else {
+            extensionHost.gameStore.stopSession()
             extensionHost.route = .gameSelection
             applyPresentationStyleForCurrentRoute()
             return
         }
         guard ProfileService.shared.profile != nil else {
+            extensionHost.gameStore.stopSession()
             extensionHost.pendingGameURL = url
             extensionHost.route = .onboarding
             applyPresentationStyleForCurrentRoute()
             return
         }
+        extensionHost.gameStore.stopSession()
         extensionHost.gameStore.state = gameState
         extensionHost.gameStore.syncer = SupabaseSync()
         extensionHost.gameStore.isHost = false
@@ -152,6 +156,7 @@ class MessagesViewController: MSMessagesAppViewController {
         pendingRouteWorkItem?.cancel()
         pendingRouteWorkItem = nil
         extensionHost.pendingGameURL = nil
+        extensionHost.gameStore.stopSession()
         extensionHost.route = ProfileService.shared.profile == nil ? .onboarding : .gameSelection
     }
    
@@ -184,6 +189,7 @@ class MessagesViewController: MSMessagesAppViewController {
         guard let conversation else { return }
 
         let store = extensionHost.gameStore
+        store.stopSession()
         store.state = GameStore.createNew(mode: .classicPoker)
         store.syncer = SupabaseSync()
         store.isHost = true
@@ -221,6 +227,7 @@ class MessagesViewController: MSMessagesAppViewController {
             return
         }
         let store = extensionHost.gameStore
+        store.stopSession()
         store.state = GameStore.createNew(mode: .practiceVsCPU)
         store.joinGame(
             playerID: Self.practiceLocalPlayerID,

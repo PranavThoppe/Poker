@@ -47,7 +47,7 @@ struct HandSummaryView: View {
 
     private var isHeroReady: Bool {
         guard let heroID = store.state.heroID else { return false }
-        return store.state.players.first(where: { $0.id == heroID })?.isReady ?? false
+        return store.effectiveHeroReady
     }
 
     private var activePlayers: [Player] {

@@ -20,11 +20,16 @@ final class GameStore: ObservableObject {
     private var showdownTimeoutTask: Task<Void, Never>?
     private var showdownAdvanceTask: Task<Void, Never>?
     private var boardRevealFallbackTask: Task<Void, Never>?
+    private var intentProcessingTask: Task<Void, Never>?
     private var lastShowdownTimeoutID: String?
     private var isFetchingHoleCards = false
     private var isRestoringHostHoleCards = false
     /// Consecutive watchdog ticks with nobody on the clock.
     private var stalledPollTicks = 0
+    private var forceRemoteReload = false
+    /// Guest-only optimistic UI. Canonical readiness always remains in `state`.
+    @Published private(set) var pendingReadyTarget: Bool?
+    @Published private(set) var isWaitingForHost = false
 
     /// True while newly dealt board cards are still flipping face-up. Bots and showdown wait;
     /// the hero hand-rank label stays on the pre-deal value so it does not spoil the flip.
@@ -49,6 +54,7 @@ final class GameStore: ObservableObject {
         showdownTimeoutTask?.cancel()
         showdownAdvanceTask?.cancel()
         boardRevealFallbackTask?.cancel()
+        intentProcessingTask?.cancel()
     }
 
     /// Hand rank shown under the hero avatar — frozen during a board flip.
@@ -88,7 +94,7 @@ final class GameStore: ObservableObject {
             if state.heroID == nil {
                 state.heroID = state.players[existing].id
             }
-            if state.gameMode == .classicPoker {
+            if state.gameMode == .classicPoker && isHost {
                 publishCurrentState()
             }
             return
@@ -98,8 +104,10 @@ final class GameStore: ObservableObject {
             state.heroID = playerID
         }
         GameLog.playerJoined(playerID: playerID, state: state)
-        if state.gameMode == .classicPoker {
+        if state.gameMode == .classicPoker && isHost {
             publishCurrentState()
+        } else if state.gameMode == .classicPoker {
+            submitIntent(kind: .join, playerID: playerID, payload: JoinGameIntentPayload(name: name, avatarIndex: avatarIndex))
         }
     }
 
@@ -111,13 +119,24 @@ final class GameStore: ObservableObject {
         if state.phase == .handSummary {
             guard !state.players[idx].isEliminated, state.players[idx].stack > 0 else { return }
         }
-        state.players[idx].isReady.toggle()
+        let desired = !effectiveHeroReady
+        if state.gameMode == .classicPoker && !isHost {
+            pendingReadyTarget = desired
+            isWaitingForHost = true
+            submitIntent(kind: .setReady, playerID: heroID, payload: ReadyIntentPayload(isReady: desired))
+            return
+        }
+        state.players[idx].isReady = desired
         GameLog.readyChanged(
             playerID: heroID,
             isReady: state.players[idx].isReady,
             state: state
         )
         publishCurrentState()
+    }
+
+    var effectiveHeroReady: Bool {
+        pendingReadyTarget ?? state.heroID.flatMap { id in state.players.first(where: { $0.id == id })?.isReady } ?? false
     }
 
     func startGame() {
@@ -141,7 +160,8 @@ final class GameStore: ObservableObject {
 
         Task { [weak self] in
             guard let self else { return }
-            await self.refreshPlayersFromServer()
+            await self.processQueuedIntentsOnce()
+            guard !self.state.players.isEmpty, self.allReady else { return }
             self.engine.startGame(&self.state)
             self.engine.startHand(&self.state)
             if previousPhase == .waiting {
@@ -252,7 +272,11 @@ final class GameStore: ObservableObject {
         guard state.phase == .showdown else { return }
         guard let id = playerID ?? state.heroID else { return }
         // Classic guests may only show themselves. Practice owns every bot locally.
-        if state.gameMode == .classicPoker, !isHost, id != state.heroID { return }
+        if state.gameMode == .classicPoker, !isHost {
+            guard id == state.heroID else { return }
+            submitIntent(kind: .showCards, playerID: id, payload: ShowCardsIntentPayload(playerID: id))
+            return
+        }
 
         let cards: [Card]
         if let real = state.holeCardsByPlayer[id], !real.isEmpty {
@@ -288,6 +312,11 @@ final class GameStore: ObservableObject {
     func advanceToHandSummary(auto: Bool = false) {
         guard state.phase == .showdown, showdownDeciderID != nil else { return }
         let practiceHeroMayAdvance = state.gameMode == .practiceVsCPU && state.heroID != nil
+        if state.gameMode == .classicPoker, !isHost {
+            guard !auto, isHeroShowdownDecider else { return }
+            submitIntent(kind: .advanceShowdown, playerID: state.heroID ?? ProfileService.deviceID, payload: EmptyIntentPayload())
+            return
+        }
         guard auto || isHeroShowdownDecider || practiceHeroMayAdvance else { return }
         GameLog.showdownAdvanced(playerID: showdownDeciderID, auto: auto, state: state)
         finishShowdownToSummary()
@@ -297,6 +326,11 @@ final class GameStore: ObservableObject {
 
     func requestManualEndGame() {
         guard state.phase == .handSummary else { return }
+        if state.gameMode == .classicPoker, !isHost {
+            submitIntent(kind: .manualFinish, playerID: state.heroID ?? ProfileService.deviceID,
+                         payload: ManualFinishIntentPayload(confirmTie: state.manualFinishTieAttempts > 0))
+            return
+        }
         if isChipTiedAmongActiveHumans() {
             if state.manualFinishTieAttempts == 0 {
                 state.manualFinishTieAttempts += 1
@@ -342,32 +376,37 @@ final class GameStore: ObservableObject {
                 GameLog.guestContinueBlocked(state: state)
                 return
             }
-            guard sessionEndsAfterHandSummary || allReadyForNextHand else { return }
+            let previousPhase = state.phase
+            Task { [weak self] in
+                guard let self else { return }
+                await self.processQueuedIntentsOnce()
+                // Re-evaluate after all queued Ready/Cancel requests are applied.
+                guard self.state.phase == .handSummary,
+                      self.sessionEndsAfterHandSummary || self.allReadyForNextHand else { return }
+                if self.engine.shouldEndGame(self.state) {
+                    self.endGame(reason: .autoLastStanding)
+                    return
+                }
+                self.engine.startHand(&self.state)
+                GameLog.nextHandStarted(state: self.state)
+                self.beginHandPhase(from: previousPhase)
+                guard await self.writeHoleCardsToSupabase() else { return }
+                self.publishCurrentState()
+                self.scheduleBotTurnIfNeeded()
+                self.scheduleBotShowIfNeeded()
+            }
+            return
         }
         if engine.shouldEndGame(state) {
             endGame(reason: .autoLastStanding)
         } else {
             let previousPhase = state.phase
-            if state.gameMode == .classicPoker {
-                Task { [weak self] in
-                    guard let self else { return }
-                    await self.refreshPlayersFromServer()
-                    self.engine.startHand(&self.state)
-                    GameLog.nextHandStarted(state: self.state)
-                    self.beginHandPhase(from: previousPhase)
-                    guard await self.writeHoleCardsToSupabase() else { return }
-                    self.publishCurrentState()
-                    self.scheduleBotTurnIfNeeded()
-                    self.scheduleBotShowIfNeeded()
-                }
-            } else {
-                engine.startHand(&state)
-                GameLog.nextHandStarted(state: state)
-                beginHandPhase(from: previousPhase)
-                publishCurrentState()
-                scheduleBotTurnIfNeeded()
-                scheduleBotShowIfNeeded()
-            }
+            engine.startHand(&state)
+            GameLog.nextHandStarted(state: state)
+            beginHandPhase(from: previousPhase)
+            publishCurrentState()
+            scheduleBotTurnIfNeeded()
+            scheduleBotShowIfNeeded()
         }
     }
 
@@ -376,6 +415,10 @@ final class GameStore: ObservableObject {
     }
 
     func resetToWaiting() {
+        if state.gameMode == .classicPoker, !isHost {
+            submitIntent(kind: .reset, playerID: state.heroID ?? ProfileService.deviceID, payload: EmptyIntentPayload())
+            return
+        }
         botScheduler.cancel()
         showdownTimeoutTask?.cancel()
         cancelShowdownAdvance()
@@ -421,6 +464,26 @@ final class GameStore: ObservableObject {
         startRoomSubscription()
         startHoleCardRetryLoop()
         startStalledHandWatchdog()
+        startIntentProcessingLoop()
+    }
+
+    /// Cancels every room-scoped task before navigation or opening another bubble. This
+    /// prevents an inactive extension from publishing/recovering an old room.
+    func stopSession() {
+        let roomID = state.gameID.uuidString
+        holeCardRetryTask?.cancel(); holeCardRetryTask = nil
+        stalledHandTask?.cancel(); stalledHandTask = nil
+        showdownTimeoutTask?.cancel(); showdownTimeoutTask = nil
+        showdownAdvanceTask?.cancel(); showdownAdvanceTask = nil
+        boardRevealFallbackTask?.cancel(); boardRevealFallbackTask = nil
+        intentProcessingTask?.cancel(); intentProcessingTask = nil
+        botScheduler.cancel()
+        syncer.unsubscribe(roomID: roomID)
+        pendingReadyTarget = nil
+        isWaitingForHost = false
+        isFetchingHoleCards = false
+        isRestoringHostHoleCards = false
+        clearBoardRevealGate()
     }
 
     /// (Re)starts the poll loop. Restarting clears the syncer's de-duplication state, so the
@@ -437,9 +500,13 @@ final class GameStore: ObservableObject {
                 heroAbsent = false
             }
 
+            // Never let a poll of the previous server snapshot erase a host mutation
+            // which is already queued for publication.
+            guard self.forceRemoteReload || remoteState.version >= self.state.version else { return }
             self.mergeRemoteState(remoteState, remoteHostID: remoteHostID)
+            self.forceRemoteReload = false
 
-            if heroAbsent {
+            if heroAbsent && self.isHost {
                 self.publishCurrentState()
             }
 
@@ -453,18 +520,119 @@ final class GameStore: ObservableObject {
         }
     }
 
+    private func startIntentProcessingLoop() {
+        intentProcessingTask?.cancel()
+        guard state.gameMode == .classicPoker, isHost else { return }
+        intentProcessingTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                await self.processQueuedIntentsOnce()
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
+    }
+
+    private func submitIntent<Payload: Encodable>(kind: GameIntentKind, playerID: String, payload: Payload) {
+        guard state.gameMode == .classicPoker else { return }
+        guard let json = try? String(data: JSONEncoder().encode(payload), encoding: .utf8) else { return }
+        isWaitingForHost = true
+        let intent = GameIntent(roomID: state.gameID.uuidString, playerID: playerID, kind: kind, payloadJSON: json)
+        Task { [weak self] in
+            do {
+                try await self?.syncer.submitIntent(intent)
+            } catch {
+                // Keep the optimistic indicator: the next deliberate tap can retry, and
+                // canonical state is never changed merely because a request failed to send.
+            }
+        }
+    }
+
+    /// The host is the sole interpreter of requests and the sole publisher of game state.
+    private func processQueuedIntentsOnce() async {
+        guard isHost, state.gameMode == .classicPoker else { return }
+        let intents: [GameIntent]
+        do {
+            intents = try await syncer.claimPendingIntents(roomID: state.gameID.uuidString, hostID: ProfileService.deviceID)
+        } catch { return }
+        for intent in intents {
+            let accepted = applyHostIntent(intent)
+            try? await syncer.resolveIntent(id: intent.id, accepted: accepted, reason: accepted ? nil : "staleOrInvalid")
+        }
+    }
+
+    @discardableResult
+    private func applyHostIntent(_ intent: GameIntent) -> Bool {
+        switch intent.kind {
+        case .join:
+            guard state.phase == .waiting,
+                  let payload = intent.decodePayload(JoinGameIntentPayload.self) else { return false }
+            if let index = state.players.firstIndex(where: { $0.id == intent.playerID }) {
+                state.players[index].name = payload.name
+                state.players[index].avatarIndex = payload.avatarIndex
+            } else {
+                state.players.append(Player(id: intent.playerID, name: payload.name, stack: PokerEngine.startingStack, avatarIndex: payload.avatarIndex))
+            }
+            publishCurrentState()
+            return true
+        case .setReady:
+            guard (state.phase == .waiting || state.phase == .handSummary),
+                  let payload = intent.decodePayload(ReadyIntentPayload.self),
+                  let index = state.players.firstIndex(where: { $0.id == intent.playerID }),
+                  !state.players[index].isEliminated, state.players[index].stack > 0 else { return false }
+            state.players[index].isReady = payload.isReady // idempotent, unlike a wire toggle.
+            GameLog.readyChanged(playerID: intent.playerID, isReady: payload.isReady, state: state)
+            publishCurrentState()
+            return true
+        case .bettingAction:
+            guard let payload = intent.decodePayload(BettingIntentPayload.self),
+                  state.phase == .playing, state.activePlayerID == intent.playerID else { return false }
+            let prior = state.players.first(where: { $0.id == intent.playerID })
+            applyAction(for: intent.playerID, action: payload.action)
+            return prior != state.players.first(where: { $0.id == intent.playerID })
+        case .showCards:
+            guard let payload = intent.decodePayload(ShowCardsIntentPayload.self),
+                  payload.playerID == intent.playerID,
+                  state.phase == .showdown, state.pendingRevealPlayerID == intent.playerID else { return false }
+            showCards(for: intent.playerID)
+            return true
+        case .advanceShowdown:
+            guard state.phase == .showdown, showdownDeciderID == intent.playerID else { return false }
+            advanceToHandSummary()
+            return true
+        case .manualFinish:
+            guard state.phase == .handSummary else { return false }
+            requestManualEndGame()
+            return true
+        case .reset:
+            guard state.phase == .ended else { return false }
+            resetToWaiting()
+            return true
+        }
+    }
+
     /// Fire-and-forget publish of the current state. No-op in practice mode.
     func publishCurrentState() {
         guard state.gameMode == .classicPoker else { return }
+        guard isHost else { return }
         guard state.hostID != nil else { return }
         state.stateVersion = state.version + 1
-        syncer.publish(state: state, roomID: state.gameID.uuidString)
+        syncer.publish(state: state, roomID: state.gameID.uuidString) { [weak self] succeeded in
+            guard let self, !succeeded else { return }
+            // A version conflict means another authoritative row won. Restarting the
+            // poll clears de-duplication and reloads that row before another mutation.
+            self.forceRemoteReload = true
+            self.startRoomSubscription()
+        }
     }
 
     // MARK: - Private
 
     private func apply(_ action: BettingAction) {
         guard let heroID = state.heroID else { return }
+        if state.gameMode == .classicPoker && !isHost {
+            submitIntent(kind: .bettingAction, playerID: heroID, payload: BettingIntentPayload(action: action))
+            return
+        }
         applyAction(for: heroID, action: action)
     }
 
@@ -857,6 +1025,13 @@ final class GameStore: ObservableObject {
 
         state = remote
         state.heroID = heroID
+
+        // Any host snapshot is authoritative confirmation (or rejection) of our
+        // requested value. Do not retain a visual override past that snapshot.
+        if pendingReadyTarget != nil {
+            pendingReadyTarget = nil
+            isWaitingForHost = false
+        }
 
         if isNewHand {
             let heroOut = state.players.first(where: { $0.id == heroID })

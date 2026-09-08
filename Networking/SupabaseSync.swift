@@ -14,6 +14,7 @@ final class SupabaseSync: GameSyncing {
 
     private var pollTask: Task<Void, Never>?
     private static let pollSelect = "id,host_id,public_state,updated_at"
+    private let publisher = StatePublisher()
 
     deinit { pollTask?.cancel() }
 
@@ -64,17 +65,19 @@ final class SupabaseSync: GameSyncing {
         }
     }
 
-    func publish(state: GameState, roomID: String) {
+    func publish(state: GameState, roomID: String, completion: @escaping @MainActor (Bool) -> Void) {
         GameLog.statePublishStarted(state: state)
         Task {
             do {
-                try await Self.publishRoom(state: state, roomID: roomID)
+                try await publisher.publish(state: state, roomID: roomID)
                 await MainActor.run {
                     GameLog.statePublishSucceeded(state: state)
+                    completion(true)
                 }
             } catch {
                 await MainActor.run {
                     GameLog.statePublishFailed(state: state)
+                    completion(false)
                 }
             }
         }
@@ -84,6 +87,25 @@ final class SupabaseSync: GameSyncing {
         pollTask?.cancel()
         pollTask = nil
         GameLog.subscriptionStopped(roomID: roomID)
+    }
+
+    func submitIntent(_ intent: GameIntent) async throws {
+        struct Payload: Encodable { let p_request_id: UUID; let p_room_id: String; let p_player_id: String; let p_intent_type: String; let p_payload: String }
+        let _: UUID = try await SupabaseClient.shared.rpc("enqueue_game_intent", body: Payload(p_request_id: intent.id, p_room_id: intent.roomID, p_player_id: intent.playerID, p_intent_type: intent.kind.rawValue, p_payload: intent.payloadJSON))
+    }
+
+    func claimPendingIntents(roomID: String, hostID: String) async throws -> [GameIntent] {
+        struct Payload: Encodable { let p_room_id: String; let p_host_id: String }
+        let rows: [IntentRow] = try await SupabaseClient.shared.rpc("claim_game_intents", body: Payload(p_room_id: roomID, p_host_id: hostID))
+        return rows.compactMap { row in
+            guard let kind = GameIntentKind(rawValue: row.intentType) else { return nil }
+            return GameIntent(id: row.requestID, roomID: row.roomID, playerID: row.playerID, kind: kind, payloadJSON: row.payload, createdAt: row.createdAt)
+        }
+    }
+
+    func resolveIntent(id: UUID, accepted: Bool, reason: String?) async throws {
+        struct Payload: Encodable { let p_request_id: UUID; let p_accepted: Bool; let p_reason: String? }
+        try await SupabaseClient.shared.rpc("resolve_game_intent", body: Payload(p_request_id: id, p_accepted: accepted, p_reason: reason))
     }
 
     /// One-shot read of the current room row. The host uses this before dealing so every
@@ -182,7 +204,7 @@ final class SupabaseSync: GameSyncing {
         return formatter
     }()
 
-    private static func publishRoom(state: GameState, roomID: String) async throws {
+    fileprivate static func publishRoom(state: GameState, roomID: String) async throws {
         var pub = state
         pub.holeCardsByPlayer = [:]
         pub.remainingDeck     = []
@@ -193,23 +215,35 @@ final class SupabaseSync: GameSyncing {
         // a player shows, so opponents' hole cards are not in the room row mid-hand.
 
         struct Payload: Encodable {
-            let id: String
-            let game_mode: String
-            let phase: String
-            let host_id: String
-            let public_state: GameState
-            let updated_at: String
+            let p_room_id: String
+            let p_host_id: String
+            let p_expected_version: Int
+            let p_game_mode: String
+            let p_phase: String
+            let p_public_state: GameState
+            let p_updated_at: String
         }
 
         let payload = Payload(
-            id:           roomID,
-            game_mode:    state.gameMode.rawValue,
-            phase:        state.phase.supabaseValue,
-            host_id:      state.hostID ?? ProfileService.deviceID,
-            public_state: pub,
-            updated_at:   timestampFormatter.string(from: Date())
+            p_room_id: roomID,
+            p_host_id: state.hostID ?? ProfileService.deviceID,
+            p_expected_version: max(0, state.version - 1),
+            p_game_mode: state.gameMode.rawValue,
+            p_phase: state.phase.supabaseValue,
+            p_public_state: pub,
+            p_updated_at: timestampFormatter.string(from: Date())
         )
-        try await SupabaseClient.shared.upsert(path: "game_rooms", body: payload)
+        let updated: Bool = try await SupabaseClient.shared.rpc("replace_game_room_state", body: payload)
+        guard updated else { throw SupabaseSyncError.staleState }
+    }
+}
+
+private enum SupabaseSyncError: Error { case staleState }
+
+/// A single actor is the ordering point for all host snapshots.
+private actor StatePublisher {
+    func publish(state: GameState, roomID: String) async throws {
+        try await SupabaseSync.publishRoom(state: state, roomID: roomID)
     }
 }
 
@@ -226,6 +260,20 @@ private struct GameRoomRow: Decodable {
         case hostID = "host_id"
         case publicState = "public_state"
         case updatedAt   = "updated_at"
+    }
+}
+
+private struct IntentRow: Decodable {
+    let requestID: UUID
+    let roomID: String
+    let playerID: String
+    let intentType: String
+    let payload: String
+    let createdAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case requestID = "request_id", roomID = "room_id", playerID = "player_id"
+        case intentType = "intent_type", payload, createdAt = "created_at"
     }
 }
 

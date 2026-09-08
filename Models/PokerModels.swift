@@ -85,6 +85,44 @@ enum BettingAction: Codable {
     case check
 }
 
+// MARK: - Multiplayer requests
+
+/// A small, durable request from a guest to the room host.  The public game row is
+/// deliberately not used as a message bus: only the host writes snapshots to it.
+enum GameIntentKind: String, Codable {
+    case join, setReady, bettingAction, showCards, advanceShowdown, manualFinish, reset
+}
+
+struct GameIntent: Codable, Identifiable {
+    let id: UUID
+    let roomID: String
+    let playerID: String
+    let kind: GameIntentKind
+    let payloadJSON: String
+    let createdAt: String?
+
+    init(id: UUID = UUID(), roomID: String, playerID: String, kind: GameIntentKind,
+         payloadJSON: String = "{}", createdAt: String? = nil) {
+        self.id = id
+        self.roomID = roomID
+        self.playerID = playerID
+        self.kind = kind
+        self.payloadJSON = payloadJSON
+        self.createdAt = createdAt
+    }
+
+    func decodePayload<T: Decodable>(_ type: T.Type) -> T? {
+        try? JSONDecoder().decode(T.self, from: Data(payloadJSON.utf8))
+    }
+}
+
+struct JoinGameIntentPayload: Codable { let name: String; let avatarIndex: Int }
+struct ReadyIntentPayload: Codable { let isReady: Bool }
+struct BettingIntentPayload: Codable { let action: BettingAction }
+struct ShowCardsIntentPayload: Codable { let playerID: String }
+struct ManualFinishIntentPayload: Codable { let confirmTie: Bool }
+struct EmptyIntentPayload: Codable {}
+
 // MARK: - Hand summary
 
 enum HandRank: String, Codable, CaseIterable {

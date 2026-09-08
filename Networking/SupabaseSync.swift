@@ -9,7 +9,6 @@ import Foundation
 ///   between two writes that share a version.
 /// - `publish` upserts game_rooms with a sanitised public state (no private card data).
 /// - Hole cards are written/read separately through `player_hole_cards`.
-/// - Poll queries exclude `debug_log` so the growing log is not downloaded every 2 s.
 final class SupabaseSync: GameSyncing {
 
     private var pollTask: Task<Void, Never>?
@@ -25,7 +24,6 @@ final class SupabaseSync: GameSyncing {
         onUpdate: @escaping @MainActor (GameState, String?) -> Void
     ) {
         pollTask?.cancel()
-        GameLog.subscriptionStarted(roomID: roomID)
         pollTask = Task { [weak self] in
             guard self != nil else { return }
             var lastSeenVersion: Int? = nil
@@ -47,9 +45,6 @@ final class SupabaseSync: GameSyncing {
                     }
                     lastSeenVersion = version
                     lastSeenUpdatedAt = row.updatedAt
-                    await MainActor.run {
-                        GameLog.remoteStateReceived(state: row.publicState)
-                    }
                     await onUpdate(row.publicState, row.hostID)
                 } catch {
                     // Transient errors (network, extension suspended) are expected — ignore silently.
@@ -66,17 +61,14 @@ final class SupabaseSync: GameSyncing {
     }
 
     func publish(state: GameState, roomID: String, completion: @escaping @MainActor (Bool) -> Void) {
-        GameLog.statePublishStarted(state: state)
         Task {
             do {
                 try await publisher.publish(state: state, roomID: roomID)
                 await MainActor.run {
-                    GameLog.statePublishSucceeded(state: state)
                     completion(true)
                 }
             } catch {
                 await MainActor.run {
-                    GameLog.statePublishFailed(state: state)
                     completion(false)
                 }
             }
@@ -86,7 +78,6 @@ final class SupabaseSync: GameSyncing {
     func unsubscribe(roomID: String) {
         pollTask?.cancel()
         pollTask = nil
-        GameLog.subscriptionStopped(roomID: roomID)
     }
 
     func submitIntent(_ intent: GameIntent) async throws {

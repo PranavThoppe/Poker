@@ -136,13 +136,11 @@ class MessagesViewController: MSMessagesAppViewController {
         extensionHost.gameStore.state = gameState
         extensionHost.gameStore.syncer = SupabaseSync()
         extensionHost.gameStore.isHost = false
-        extensionHost.gameStore.configureDebugLogging()
         extensionHost.gameStore.joinGame(
             playerID: ProfileService.deviceID,
             name: Self.localPlayerName(for: conversation),
             avatarIndex: ProfileService.shared.profile?.avatarIndex ?? 0
         )
-        GameLog.roomOpened(state: extensionHost.gameStore.state)
         extensionHost.gameStore.subscribeToRoom()
         extensionHost.route = .game
         requestPresentationStyle(.expanded)
@@ -193,13 +191,11 @@ class MessagesViewController: MSMessagesAppViewController {
         store.state = GameStore.createNew(mode: .classicPoker)
         store.syncer = SupabaseSync()
         store.isHost = true
-        store.configureDebugLogging()
         store.joinGame(
             playerID: ProfileService.deviceID,
             name: Self.localPlayerName(for: conversation),
             avatarIndex: ProfileService.shared.profile?.avatarIndex ?? 0
         )
-        GameLog.roomCreated(state: store.state)
         store.subscribeToRoom()
 
         let message = MSMessage()

@@ -47,6 +47,8 @@ struct GameSelectionView: View {
         VStack(spacing: Theme.Spacing.md) {
             classicPokerCard
 
+            practiceVsCPUCard
+
             Divider()
                 .overlay(Theme.Color.surfaceDeep)
 
@@ -55,8 +57,6 @@ struct GameSelectionView: View {
                 .foregroundStyle(Theme.Color.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, Theme.Spacing.xs)
-
-            practiceVsCPUCard
 
             ForEach(0..<upcomingModeCount, id: \.self) { _ in
                 upcomingModeCard

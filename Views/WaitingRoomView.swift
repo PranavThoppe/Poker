@@ -10,7 +10,7 @@ struct WaitingRoomView: View {
     private var totalCount: Int { players.count }
     private var isHeroReady: Bool {
         guard let id = heroID else { return false }
-        return store.effectiveHeroReady
+        return players.first { $0.id == id }?.isReady ?? false
     }
 
     var body: some View {
@@ -78,7 +78,7 @@ struct WaitingRoomView: View {
 
     private var readyButton: some View {
         Button(action: { store.toggleReady() }) {
-            Text(store.pendingReadyTarget == nil ? (isHeroReady ? "Cancel" : "Ready Up") : "Waiting for host…")
+            Text(isHeroReady ? "Cancel" : "Ready Up")
                 .font(Theme.Font.actionLabel)
                 .foregroundStyle(isHeroReady ? Theme.Color.secondary : Theme.Color.background)
                 .frame(maxWidth: .infinity)
@@ -86,7 +86,6 @@ struct WaitingRoomView: View {
                 .background(isHeroReady ? Theme.Color.surface : Theme.Color.primary)
                 .clipShape(Capsule())
         }
-        .disabled(store.pendingReadyTarget != nil)
         .animation(.easeInOut(duration: 0.2), value: isHeroReady)
     }
 

@@ -1,6 +1,7 @@
 import Foundation
 
-/// Protocol implemented by the local mock and the Supabase room synchronizer.
+/// Protocol that any real-time sync backend must conform to.
+/// Today only `MockSync` exists; a `SupabaseSync` will implement this later.
 protocol GameSyncing: AnyObject {
     /// Subscribe to state changes from remote players.
     /// The closure is called on the main actor whenever a new state arrives.
@@ -10,13 +11,7 @@ protocol GameSyncing: AnyObject {
     )
 
     /// Publish a local state change to all other participants.
-    func publish(state: GameState, roomID: String, completion: @escaping @MainActor (Bool) -> Void)
-
-    /// Durable guest-to-host request operations. Implementations must never turn an
-    /// intent into a public-state write themselves.
-    func submitIntent(_ intent: GameIntent) async throws
-    func claimPendingIntents(roomID: String, hostID: String) async throws -> [GameIntent]
-    func resolveIntent(id: UUID, accepted: Bool, reason: String?) async throws
+    func publish(state: GameState, roomID: String)
 
     /// Tear down the subscription.
     func unsubscribe(roomID: String)
@@ -85,15 +80,11 @@ private extension GamePhase {
 
 // MARK: - No-op mock
 
-@MainActor
 final class MockSync: GameSyncing {
     func subscribe(
         roomID: String,
         onUpdate: @escaping @MainActor (GameState, String?) -> Void
     ) {}
-    func publish(state: GameState, roomID: String, completion: @escaping @MainActor (Bool) -> Void) { completion(true) }
-    func submitIntent(_ intent: GameIntent) async throws {}
-    func claimPendingIntents(roomID: String, hostID: String) async throws -> [GameIntent] { [] }
-    func resolveIntent(id: UUID, accepted: Bool, reason: String?) async throws {}
+    func publish(state: GameState, roomID: String) {}
     func unsubscribe(roomID: String) {}
 }

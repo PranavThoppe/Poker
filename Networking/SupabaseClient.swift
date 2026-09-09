@@ -42,21 +42,6 @@ struct SupabaseClient {
         try validate(response)
     }
 
-    /// Calls an RPC that returns JSON (used by version-checked state writes and the
-    /// intent queue). PostgreSQL scalar RPC responses are decoded directly.
-    func rpc<T: Decodable>(_ function: String, body: some Encodable) async throws -> T {
-        guard let url = URL(string: SupabaseConstants.projectURL + "/rest/v1/rpc/" + function) else {
-            throw URLError(.badURL)
-        }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        applyHeaders(to: &request, contentType: true)
-        request.httpBody = try encoder.encode(body)
-        let (data, response) = try await session.data(for: request)
-        try validate(response)
-        return try decoder.decode(T.self, from: data)
-    }
-
     // MARK: - DELETE
 
     func delete(path: String, query: [String: String] = [:]) async throws {

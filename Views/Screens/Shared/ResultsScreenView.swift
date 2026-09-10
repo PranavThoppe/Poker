@@ -13,6 +13,11 @@ enum PlayerReadyStatus {
     case out
 }
 
+struct GameSettingsConfiguration {
+    let smallBlind: Int
+    let onRaiseSmallBlind: (Int) -> Void
+}
+
 struct ResultsScreenView: View {
     let stats: [PlayerStats]
     let winnerLabel: String
@@ -32,6 +37,7 @@ struct ResultsScreenView: View {
     var buttonFillColor: Color = Theme.Color.primary
     var buttonTrackColor: Color = Theme.Color.surface
     var buttonTextColor: Color = Theme.Color.background
+    var gameSettings: GameSettingsConfiguration? = nil
 
     var body: some View {
         ZStack {
@@ -53,6 +59,12 @@ struct ResultsScreenView: View {
                 Spacer().frame(height: Theme.Spacing.sm)
 
                 statsList
+
+                if let gameSettings {
+                    GameSettingsButton(configuration: gameSettings)
+                        .padding(.horizontal, Theme.Spacing.md)
+                        .padding(.top, Theme.Spacing.md)
+                }
 
                 Spacer()
 
@@ -199,6 +211,77 @@ struct ResultsScreenView: View {
                 .frame(height: Theme.Size.actionPillH)
                 .background(Theme.Color.surface)
                 .clipShape(Capsule())
+        }
+    }
+}
+
+private struct GameSettingsButton: View {
+    let configuration: GameSettingsConfiguration
+
+    @State private var isShowingSettings = false
+    @State private var proposedSmallBlind = 5
+
+    private var maximumSmallBlind: Int {
+        max(250, configuration.smallBlind + 100)
+    }
+
+    var body: some View {
+        Button {
+            proposedSmallBlind = configuration.smallBlind + 5
+            isShowingSettings = true
+        } label: {
+            HStack {
+                Label("Game Settings", systemImage: "slider.horizontal.3")
+                    .font(Theme.Font.actionLabel)
+                Spacer()
+            }
+            .foregroundStyle(Theme.Color.primary)
+            .padding(.horizontal, Theme.Spacing.md)
+            .frame(maxWidth: .infinity)
+            .frame(height: Theme.Size.actionPillH)
+            .background(Theme.Color.surface)
+            .clipShape(Capsule())
+        }
+        .accessibilityHint("Raise blinds for the next hand")
+        .popover(isPresented: $isShowingSettings) {
+            VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+                HStack {
+                    Text("Game Settings")
+                        .font(Theme.Font.subhead)
+                        .foregroundStyle(Theme.Color.primary)
+                    Spacer()
+                    Text("\(configuration.smallBlind)/\(configuration.smallBlind * 2)")
+                        .font(Theme.Font.caption)
+                        .foregroundStyle(Theme.Color.secondary)
+                }
+
+                Stepper(value: $proposedSmallBlind, in: (configuration.smallBlind + 5)...maximumSmallBlind, step: 5) {
+                    VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                        Text("Small blind: \(proposedSmallBlind)")
+                        Text("Big blind: \(proposedSmallBlind * 2)")
+                            .font(Theme.Font.caption)
+                            .foregroundStyle(Theme.Color.secondary)
+                    }
+                }
+
+                Text("Applies to the next hand. Blind levels can only increase.")
+                    .font(Theme.Font.caption)
+                    .foregroundStyle(Theme.Color.secondary)
+
+                HStack {
+                    Button("Cancel") { isShowingSettings = false }
+                    Spacer()
+                    Button("Apply") {
+                        configuration.onRaiseSmallBlind(proposedSmallBlind)
+                        isShowingSettings = false
+                    }
+                    .fontWeight(.semibold)
+                }
+            }
+            .padding(Theme.Spacing.lg)
+            .frame(width: 290)
+            .presentationCompactAdaptation(.popover)
+            .preferredColorScheme(.dark)
         }
     }
 }

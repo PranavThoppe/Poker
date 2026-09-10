@@ -170,6 +170,9 @@ struct GameState: Codable {
     var stateVersion: Int? = nil
     var gameMode: GameMode = .classicPoker
     var phase: GamePhase = .waiting
+    /// The small blind for the next hand. `nil` preserves the original 5/10 level for rooms
+    /// created before configurable blinds were introduced.
+    var smallBlind: Int? = nil
     var players: [Player] = []
     var board: [Card?] = Array(repeating: nil, count: 5)
     var pot: Int = 0

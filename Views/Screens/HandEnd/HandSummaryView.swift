@@ -91,7 +91,13 @@ struct HandSummaryView: View {
             readyStatusByPlayerID: readyStatusByPlayerID,
             buttonFillColor: Theme.Color.green,
             buttonTrackColor: Theme.Color.green.opacity(0.25),
-            buttonTextColor: Theme.Color.primary
+            buttonTextColor: Theme.Color.primary,
+            gameSettings: store.canRaiseBlinds
+                ? GameSettingsConfiguration(
+                    smallBlind: store.tableSmallBlind,
+                    onRaiseSmallBlind: { store.raiseSmallBlind(to: $0) }
+                )
+                : nil
         )
         .alert("There can only be 1 winner", isPresented: $store.showManualFinishTieWarning) {
             Button("Continue", role: .cancel) {

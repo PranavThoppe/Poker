@@ -181,6 +181,24 @@ final class GameStore: ObservableObject {
             && isHost
     }
 
+    var tableSmallBlind: Int {
+        engine.smallBlind(for: state)
+    }
+
+    var canRaiseBlinds: Bool {
+        state.phase == .handSummary
+            && !sessionEndsAfterHandSummary
+            && (state.gameMode == .practiceVsCPU || isHost)
+    }
+
+    /// Blind levels only change between hands and preserve each player's ready status.
+    func raiseSmallBlind(to newSmallBlind: Int) {
+        guard canRaiseBlinds, newSmallBlind > tableSmallBlind else { return }
+
+        state.smallBlind = newSmallBlind
+        publishCurrentState()
+    }
+
     var isHeroTurn: Bool {
         guard let heroID = state.heroID else { return false }
         return state.activePlayerID == heroID

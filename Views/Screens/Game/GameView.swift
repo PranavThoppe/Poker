@@ -49,7 +49,7 @@ struct GameView: View {
                     callAmount: store.state.callAmount,
                     raiseAmount: store.state.raiseAmount,
                     maximumRaiseAmount: maximumRaiseAmount,
-                    raiseIncrement: PokerEngine.smallBlind,
+                    raiseIncrement: store.tableSmallBlind,
                     canRaise: canRaise,
                     isHeroTurn: store.isHeroTurn && !isBoardRevealing && !store.isBoardRevealPending,
                     onCheck: { store.check() },

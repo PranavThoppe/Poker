@@ -5,6 +5,14 @@ struct PokerEngine {
     static let bigBlind = 10
     static let startingStack = 500
 
+    func smallBlind(for state: GameState) -> Int {
+        max(state.smallBlind ?? Self.smallBlind, Self.smallBlind)
+    }
+
+    func bigBlind(for state: GameState) -> Int {
+        smallBlind(for: state) * 2
+    }
+
     // MARK: - Session / hand lifecycle
 
     mutating func startGame(_ state: inout GameState) {
@@ -20,7 +28,7 @@ struct PokerEngine {
         state.pot = 0
         state.holeCardsByPlayer = [:]
         state.streetBetLevel = 0
-        state.lastRaiseSize = Self.bigBlind
+        state.lastRaiseSize = bigBlind(for: state)
         state.actedThisStreet = []
         state.contributions = [:]
         state.handResult = nil
@@ -43,7 +51,7 @@ struct PokerEngine {
         state.pot = 0
         state.holeCardsByPlayer = [:]
         state.streetBetLevel = 0
-        state.lastRaiseSize = Self.bigBlind
+        state.lastRaiseSize = bigBlind(for: state)
         state.actedThisStreet = []
         state.contributions = [:]
         state.handResult = nil
@@ -175,7 +183,7 @@ struct PokerEngine {
 
         // When the minimum raise is unaffordable, shoving the rest of the stack still is.
         let maxTotal = player.currentBet + player.stack
-        let minRaiseTo = state.streetBetLevel + max(state.lastRaiseSize, Self.bigBlind)
+        let minRaiseTo = state.streetBetLevel + max(state.lastRaiseSize, bigBlind(for: state))
         if maxTotal > state.streetBetLevel {
             actions.append(.raise(amount: min(minRaiseTo, maxTotal)))
         }
@@ -538,11 +546,13 @@ struct PokerEngine {
         let sbIdx = blinds.smallBlind
         let bbIdx = blinds.bigBlind
 
-        postBet(&state, playerIndex: sbIdx, amount: min(Self.smallBlind, state.players[sbIdx].stack))
-        postBet(&state, playerIndex: bbIdx, amount: min(Self.bigBlind, state.players[bbIdx].stack))
+        let smallBlind = smallBlind(for: state)
+        let bigBlind = bigBlind(for: state)
+        postBet(&state, playerIndex: sbIdx, amount: min(smallBlind, state.players[sbIdx].stack))
+        postBet(&state, playerIndex: bbIdx, amount: min(bigBlind, state.players[bbIdx].stack))
 
         state.streetBetLevel = max(state.players[sbIdx].currentBet, state.players[bbIdx].currentBet)
-        state.lastRaiseSize = Self.bigBlind
+        state.lastRaiseSize = bigBlind
         state.actedThisStreet = []
         markAllInPlayersActed(&state)
     }
@@ -854,15 +864,16 @@ struct PokerEngine {
         guard let heroID = state.heroID,
               let idx = state.players.firstIndex(where: { $0.id == heroID }) else {
             state.callAmount = 0
-            state.raiseAmount = state.streetBetLevel + max(state.lastRaiseSize, Self.bigBlind)
+            state.raiseAmount = state.streetBetLevel + max(state.lastRaiseSize, bigBlind(for: state))
             return
         }
         let heroBet = state.players[idx].currentBet
         state.callAmount = max(0, state.streetBetLevel - heroBet)
-        let minRaiseTo = state.streetBetLevel + max(state.lastRaiseSize, Self.bigBlind)
+        let bigBlind = bigBlind(for: state)
+        let minRaiseTo = state.streetBetLevel + max(state.lastRaiseSize, bigBlind)
         state.raiseAmount = min(minRaiseTo, heroBet + state.players[idx].stack)
         if state.raiseAmount <= state.streetBetLevel {
-            state.raiseAmount = min(state.streetBetLevel + Self.bigBlind, heroBet + state.players[idx].stack)
+            state.raiseAmount = min(state.streetBetLevel + bigBlind, heroBet + state.players[idx].stack)
         }
     }
 

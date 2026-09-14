@@ -97,7 +97,8 @@ struct HandSummaryView: View {
                     smallBlind: store.tableSmallBlind,
                     onRaiseSmallBlind: { store.raiseSmallBlind(to: $0) }
                 )
-                : nil
+                : nil,
+            gameSettingsConfirmation: store.blindIncreaseConfirmation
         )
         .alert("There can only be 1 winner", isPresented: $store.showManualFinishTieWarning) {
             Button("Continue", role: .cancel) {

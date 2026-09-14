@@ -51,7 +51,7 @@ struct GameView: View {
                     maximumRaiseAmount: maximumRaiseAmount,
                     raiseIncrement: store.tableSmallBlind,
                     canRaise: canRaise,
-                    isHeroTurn: store.isHeroTurn && !isBoardRevealing && !store.isBoardRevealPending,
+                    isHeroTurn: store.isHeroTurn && !store.isAutomatedHero && !isBoardRevealing && !store.isBoardRevealPending,
                     onCheck: { store.check() },
                     onCall: { store.call() },
                     onRaise: { store.raise($0) },
@@ -169,9 +169,7 @@ struct BoardView: View {
                 }
             }
 
-            Text("\(pot)")
-                .font(Theme.Font.pot)
-                .foregroundStyle(Theme.Color.primary)
+            RollingPotValue(value: pot)
                 .padding(.trailing, Theme.Spacing.xs)
         }
         .padding(.horizontal, Theme.Spacing.md)
@@ -246,6 +244,77 @@ struct BoardView: View {
             }
         }
         try? await Task.sleep(nanoseconds: UInt64(Self.flipDuration * 1_000_000_000))
+    }
+}
+
+// MARK: - Pot counter
+
+/// Counts a growing pot one chip at a time and rolls only the digits that change.
+/// A large raise is still capped to a short duration so the table remains responsive.
+private struct RollingPotValue: View {
+    let value: Int
+
+    @State private var displayedValue: Int = 0
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(Array(String(displayedValue).enumerated()), id: \.offset) { _, digit in
+                RollingPotDigit(digit: digit)
+            }
+        }
+        .font(Theme.Font.pot.monospacedDigit())
+        .foregroundStyle(Theme.Color.primary)
+        .accessibilityLabel("Pot \(displayedValue)")
+        .task(id: value) {
+            await count(to: value)
+        }
+    }
+
+    @MainActor
+    private func count(to target: Int) async {
+        // Pot decreases are hand transitions rather than chips entering the pot, so snap them.
+        guard target >= displayedValue else {
+            displayedValue = target
+            return
+        }
+
+        let change = target - displayedValue
+        guard change > 0 else { return }
+
+        // Small bets visibly tick through every chip. Bigger pots use shorter ticks, capped
+        // at roughly three quarters of a second overall.
+        let tickDuration = min(0.02, max(0.001, 0.75 / Double(change)))
+        let delay = UInt64(tickDuration * 1_000_000_000)
+        let startingValue = displayedValue
+
+        for nextValue in (startingValue + 1)...target {
+            guard !Task.isCancelled else { return }
+            try? await Task.sleep(nanoseconds: delay)
+            guard !Task.isCancelled else { return }
+
+            withAnimation(.linear(duration: min(0.06, tickDuration * 1.8))) {
+                displayedValue = nextValue
+            }
+        }
+    }
+}
+
+/// Swaps a single digit on a tiny vertical wheel, leaving unchanged digits still.
+private struct RollingPotDigit: View {
+    let digit: Character
+
+    var body: some View {
+        ZStack {
+            Text(String(digit))
+                .id(digit)
+                .transition(
+                    .asymmetric(
+                        insertion: .move(edge: .bottom).combined(with: .opacity),
+                        removal: .move(edge: .top).combined(with: .opacity)
+                    )
+                )
+        }
+        .animation(.linear(duration: 0.06), value: digit)
     }
 }
 

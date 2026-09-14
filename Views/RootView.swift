@@ -27,6 +27,7 @@ struct RootView: View {
                 }
             }
             .animation(.easeInOut(duration: 0.3), value: store.state.phase)
+
         }
     }
 }

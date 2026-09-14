@@ -38,6 +38,7 @@ struct ResultsScreenView: View {
     var buttonTrackColor: Color = Theme.Color.surface
     var buttonTextColor: Color = Theme.Color.background
     var gameSettings: GameSettingsConfiguration? = nil
+    var gameSettingsConfirmation: String? = nil
 
     var body: some View {
         ZStack {
@@ -64,6 +65,17 @@ struct ResultsScreenView: View {
                     GameSettingsButton(configuration: gameSettings)
                         .padding(.horizontal, Theme.Spacing.md)
                         .padding(.top, Theme.Spacing.md)
+
+                    if let gameSettingsConfirmation {
+                        Label(gameSettingsConfirmation, systemImage: "arrow.up.right.circle.fill")
+                            .font(Theme.Font.caption)
+                            .foregroundStyle(Theme.Color.primary)
+                            .padding(.horizontal, Theme.Spacing.md)
+                            .padding(.vertical, Theme.Spacing.xs)
+                            .background(Theme.Color.green.opacity(0.9))
+                            .clipShape(Capsule())
+                            .transition(.opacity)
+                    }
                 }
 
                 Spacer()

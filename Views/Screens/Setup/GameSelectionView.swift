@@ -3,6 +3,7 @@ import SwiftUI
 struct GameSelectionView: View {
     var onClassicSend: () -> Void
     var onPracticePlay: () -> Void
+    var onMarketingDemo: (() -> Void)? = nil
 
     @ObservedObject private var winStats = WinStatsService.shared
     @State private var selectedMode: GameMode?
@@ -48,6 +49,10 @@ struct GameSelectionView: View {
             classicPokerCard
 
             practiceVsCPUCard
+
+            #if DEBUG
+            marketingDemoCard
+            #endif
 
             Divider()
                 .overlay(Theme.Color.surfaceDeep)
@@ -98,6 +103,25 @@ struct GameSelectionView: View {
             selectedMode = selectedMode == .practiceVsCPU ? nil : .practiceVsCPU
         }
     }
+
+    #if DEBUG
+    private var marketingDemoCard: some View {
+        gameModeCard(
+            icon: {
+                Image(systemName: "video.fill")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(Theme.Color.green)
+            },
+            iconBackground: Theme.Color.surfaceDeep,
+            title: "Marketing Demo",
+            subtitle: "Scripted recording session",
+            isSelected: false,
+            isEnabled: true
+        ) {
+            onMarketingDemo?()
+        }
+    }
+    #endif
 
     private var upcomingModeCard: some View {
         gameModeCard(

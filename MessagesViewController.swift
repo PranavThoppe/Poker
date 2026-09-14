@@ -36,12 +36,6 @@ class MessagesViewController: MSMessagesAppViewController {
             self?.startPracticeSession()
         }
 
-        #if DEBUG
-        extensionHost.onMarketingDemo = { [weak self] in
-            self?.startMarketingDemo()
-        }
-        #endif
-
         extensionHost.onboardingDidComplete = { [weak self] in
             guard let self else { return }
             if let url = self.extensionHost.pendingGameURL {
@@ -234,13 +228,6 @@ class MessagesViewController: MSMessagesAppViewController {
 
     private static let practiceLocalPlayerID = "practice-local"
 
-    #if DEBUG
-    private func startMarketingDemo() {
-        extensionHost.route = .marketingDemo
-        requestPresentationStyle(.expanded)
-    }
-    #endif
-
 }
 
 // MARK: - SwiftUI routing
@@ -251,9 +238,6 @@ private final class ExtensionHostModel: ObservableObject {
         case onboarding
         case gameSelection
         case game
-        #if DEBUG
-        case marketingDemo
-        #endif
     }
 
     @Published var route: Route = .gameSelection
@@ -262,9 +246,6 @@ private final class ExtensionHostModel: ObservableObject {
     var pendingGameURL: URL?
     var onSendToChat: (() -> Void)?
     var onPracticePlay: (() -> Void)?
-    #if DEBUG
-    var onMarketingDemo: (() -> Void)?
-    #endif
     var onboardingDidComplete: (() -> Void)?
 
     init(gameStore: GameStore) {
@@ -274,9 +255,6 @@ private final class ExtensionHostModel: ObservableObject {
     var prefersExpandedPresentation: Bool {
         switch route {
         case .onboarding, .gameSelection, .game: return true
-        #if DEBUG
-        case .marketingDemo: return true
-        #endif
         }
     }
 }
@@ -294,19 +272,10 @@ private struct ExtensionShellView: View {
             case .gameSelection:
                 GameSelectionView(
                     onClassicSend: { model.onSendToChat?() ?? () },
-                    onPracticePlay: { model.onPracticePlay?() ?? () },
-                    onMarketingDemo: {
-                        #if DEBUG
-                        model.onMarketingDemo?()
-                        #endif
-                    }
+                    onPracticePlay: { model.onPracticePlay?() ?? () }
                 )
             case .game:
                 RootView().environmentObject(model.gameStore)
-            #if DEBUG
-            case .marketingDemo:
-                MarketingDemoView()
-            #endif
             }
         }
     }

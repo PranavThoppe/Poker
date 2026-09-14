@@ -51,7 +51,7 @@ struct GameView: View {
                     maximumRaiseAmount: maximumRaiseAmount,
                     raiseIncrement: store.tableSmallBlind,
                     canRaise: canRaise,
-                    isHeroTurn: store.isHeroTurn && !store.isAutomatedHero && !isBoardRevealing && !store.isBoardRevealPending,
+                    isHeroTurn: store.isHeroTurn && !isBoardRevealing && !store.isBoardRevealPending,
                     onCheck: { store.check() },
                     onCall: { store.call() },
                     onRaise: { store.raise($0) },

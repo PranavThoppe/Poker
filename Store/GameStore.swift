@@ -915,6 +915,12 @@ final class GameStore: ObservableObject {
         state = remote
         state.heroID = heroID
 
+        // Guests receive the completed-hand transition from the host rather than
+        // running its engine locally. The service de-duplicates replayed states.
+        if state.phase == .handSummary || state.phase == .ended {
+            creditLocalPlayerForCompletedHand()
+        }
+
         if isNewHand {
             let heroOut = state.players.first(where: { $0.id == heroID })
                 .map { $0.isEliminated || $0.stack <= 0 } ?? true
@@ -1330,7 +1336,19 @@ final class GameStore: ObservableObject {
     private func markHandCompletedIfNeeded(previousPhase: GamePhase) {
         guard previousPhase != .handSummary, previousPhase != .ended else { return }
         state.completedHandCount += 1
+        creditLocalPlayerForCompletedHand()
         syncManualFinishTieAttempts()
+    }
+
+    private func creditLocalPlayerForCompletedHand() {
+        guard let handID = state.handID,
+              let heroID = state.heroID,
+              state.completedHandCount > 0,
+              // A player eliminated before this deal remains in the room but is
+              // not dealt cards. A player eliminated by this hand has this hand
+              // included in their session total, so the count still matches.
+              (state.handStats[heroID]?.handsPlayed ?? 0) >= state.completedHandCount else { return }
+        HandsPlayedStatsService.shared.recordCompletedHand(handID: handID, gameMode: state.gameMode)
     }
 
     private func syncManualFinishTieAttempts() {

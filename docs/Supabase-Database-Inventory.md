@@ -8,13 +8,14 @@ Supabase Dashboard or service-role access. Confirm the exact live names,
 columns, row counts, RLS policies, and migrations in Supabase before removing
 anything.
 
-The client code and checked-in SQL identify these five active tables:
+The client code and checked-in SQL identify these six active tables:
 
 1. `profiles`
 2. `game_rooms`
 3. `player_hole_cards`
 4. `game_intents`
 5. `game_win_credits`
+6. `hand_played_credits`
 
 > **Naming check:** the app uses `player_hole_cards`, not
 > `profile_hole_cards`, and uses `game_intents`, not `intents`. If the Dashboard
@@ -26,11 +27,12 @@ The client code and checked-in SQL identify these five active tables:
 
 | Table | Status | Why it exists | What breaks if removed |
 | --- | --- | --- | --- |
-| `profiles` | Essential | Stores the device profile: `id`, `display_name`, `avatar_index`, and `lifetime_wins`. It is created/updated during onboarding. | Onboarding sync fails; lifetime-win sync and the win-credit foreign key fail. |
+| `profiles` | Essential | Stores the device profile: `id`, `display_name`, `avatar_index`, `lifetime_wins`, and `lifetime_hands_played`. It is created/updated during onboarding. | Onboarding sync fails; lifetime-stat sync and credit foreign keys fail. |
 | `game_rooms` | Essential | The current multiplayer-room snapshot: host, game mode, phase, public game state, update time, and version. | Multiplayer join, polling, and state synchronization stop working. |
 | `player_hole_cards` | Essential for multiplayer | Stores each player's private cards separately from the public room state, scoped by `room_id`, `player_id`, and `hand_id`. | Players cannot reliably receive/recover their hole cards; private cards would have to be moved into public state, which is unsafe. |
 | `game_intents` | Essential for host-authoritative multiplayer | A queue for player actions (`ready`, bets, folds, reset, etc.) which the host claims and resolves. | Guests cannot submit gameplay actions for the host to process. |
 | `game_win_credits` | Supporting / optional feature | Idempotency ledger for lifetime-win counting: one row per `(game_id, player_id)`. | The lifetime-wins display can double-count on retries unless this feature and its RPC are removed or redesigned. Core poker gameplay still works. |
+| `hand_played_credits` | Supporting profile-stat feature | Idempotency ledger for lifetime hands played: one row per `(hand_id, player_id)`, including `game_mode`. | The lifetime-hands count can double-count on retries unless this feature and its RPC are removed or redesigned. Core poker gameplay still works. |
 
 ## Recommended organization
 

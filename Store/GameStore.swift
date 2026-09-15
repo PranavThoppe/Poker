@@ -22,6 +22,8 @@ final class GameStore: ObservableObject {
     private var showdownAdvanceTask: Task<Void, Never>?
     private var boardRevealFallbackTask: Task<Void, Never>?
     private var blindIncreaseConfirmationTask: Task<Void, Never>?
+    private var lastHandledBlindIncreaseAnnouncementID: UUID?
+    private var hasReceivedInitialRoomState = false
     private var lastShowdownTimeoutID: String?
     private var isFetchingHoleCards = false
     private var isRestoringHostHoleCards = false
@@ -199,13 +201,12 @@ final class GameStore: ObservableObject {
         guard canRaiseBlinds, newSmallBlind > tableSmallBlind else { return }
 
         state.smallBlind = newSmallBlind
-        blindIncreaseConfirmation = "Blinds increased: \(newSmallBlind) / \(newSmallBlind * 2)"
-        blindIncreaseConfirmationTask?.cancel()
-        blindIncreaseConfirmationTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(2.5))
-            guard let self, !Task.isCancelled else { return }
-            self.blindIncreaseConfirmation = nil
+        if state.gameMode == .classicPoker {
+            let announcement = BlindIncreaseAnnouncement(id: UUID(), smallBlind: newSmallBlind)
+            state.blindIncreaseAnnouncement = announcement
+            lastHandledBlindIncreaseAnnouncementID = announcement.id
         }
+        presentBlindIncreaseConfirmation(smallBlind: newSmallBlind)
         publishCurrentState()
     }
 
@@ -454,6 +455,8 @@ final class GameStore: ObservableObject {
     /// (Re)starts the poll loop. Restarting clears the syncer's de-duplication state, so the
     /// next tick re-merges the server's current row even if we already saw that version.
     private func startRoomSubscription() {
+        hasReceivedInitialRoomState = false
+        lastHandledBlindIncreaseAnnouncementID = nil
         let roomID = state.gameID.uuidString
         syncer.subscribe(roomID: roomID) { [weak self] remoteState, remoteHostID in
             guard let self else { return }
@@ -855,6 +858,31 @@ final class GameStore: ObservableObject {
         state.players.first(where: { $0.id == playerID })?.isBot == true
     }
 
+    private func presentBlindIncreaseConfirmation(smallBlind: Int) {
+        blindIncreaseConfirmation = "Blinds increased: \(smallBlind) / \(smallBlind * 2)"
+        blindIncreaseConfirmationTask?.cancel()
+        blindIncreaseConfirmationTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(2.5))
+            guard let self, !Task.isCancelled else { return }
+            self.blindIncreaseConfirmation = nil
+        }
+    }
+
+    /// Establishes the first room response as a baseline, then presents each newer event once.
+    private func handleBlindIncreaseAnnouncement(from remote: GameState) {
+        guard hasReceivedInitialRoomState else {
+            lastHandledBlindIncreaseAnnouncementID = remote.blindIncreaseAnnouncement?.id
+            hasReceivedInitialRoomState = true
+            return
+        }
+
+        guard let announcement = remote.blindIncreaseAnnouncement,
+              announcement.id != lastHandledBlindIncreaseAnnouncementID else { return }
+
+        lastHandledBlindIncreaseAnnouncementID = announcement.id
+        presentBlindIncreaseConfirmation(smallBlind: announcement.smallBlind)
+    }
+
     /// Merges a remote `GameState` into local state while preserving per-client private data:
     /// the hero's identity, their hole cards, and the host's full `holeCardsByPlayer` map.
     /// Public fields including `handResult` come from remote (version-wins).
@@ -871,6 +899,7 @@ final class GameStore: ObservableObject {
             state = remote
             engine.syncBettingUI(&state)
             engine.updateHeroDisplay(&state)
+            handleBlindIncreaseAnnouncement(from: remote)
             GameLog.remoteStateMerged(state: state, heroRestored: false)
             return
         }
@@ -914,6 +943,7 @@ final class GameStore: ObservableObject {
 
         engine.syncBettingUI(&state)
         engine.updateHeroDisplay(&state)
+        handleBlindIncreaseAnnouncement(from: remote)
         GameLog.remoteStateMerged(state: state, heroRestored: heroWasMissing)
 
         if state.phase == .playing {

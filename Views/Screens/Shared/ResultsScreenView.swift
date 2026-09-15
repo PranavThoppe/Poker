@@ -19,6 +19,8 @@ struct GameSettingsConfiguration {
 }
 
 struct ResultsScreenView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     let stats: [PlayerStats]
     let winnerLabel: String
     let winners: [ResultsWinner]
@@ -39,6 +41,8 @@ struct ResultsScreenView: View {
     var buttonTextColor: Color = Theme.Color.background
     var gameSettings: GameSettingsConfiguration? = nil
     var gameSettingsConfirmation: String? = nil
+
+    @State private var isBlindConfirmationPulseComplete = false
 
     var body: some View {
         ZStack {
@@ -65,20 +69,14 @@ struct ResultsScreenView: View {
                     GameSettingsButton(configuration: gameSettings)
                         .padding(.horizontal, Theme.Spacing.md)
                         .padding(.top, Theme.Spacing.md)
-
-                    if let gameSettingsConfirmation {
-                        Label(gameSettingsConfirmation, systemImage: "arrow.up.right.circle.fill")
-                            .font(Theme.Font.caption)
-                            .foregroundStyle(Theme.Color.primary)
-                            .padding(.horizontal, Theme.Spacing.md)
-                            .padding(.vertical, Theme.Spacing.xs)
-                            .background(Theme.Color.green.opacity(0.9))
-                            .clipShape(Capsule())
-                            .transition(.opacity)
-                    }
                 }
 
-                Spacer()
+                if let gameSettingsConfirmation {
+                    blindIncreaseConfirmation(gameSettingsConfirmation)
+                        .padding(.top, Theme.Spacing.sm)
+                }
+
+                Spacer(minLength: Theme.Spacing.md)
 
                 VStack(spacing: Theme.Spacing.sm) {
                     if let tertiaryButtonTitle, let onTertiaryButton {
@@ -106,6 +104,50 @@ struct ResultsScreenView: View {
                 Spacer().frame(height: Theme.Spacing.xl)
             }
         }
+        .animation(
+            reduceMotion ? .easeInOut(duration: 0.2) : .spring(response: 0.42, dampingFraction: 0.68),
+            value: gameSettingsConfirmation
+        )
+    }
+
+    private func blindIncreaseConfirmation(_ message: String) -> some View {
+        Label(message, systemImage: "arrow.up.right.circle.fill")
+            .font(.system(size: 14, weight: .regular))
+            .labelStyle(.titleAndIcon)
+            .foregroundStyle(Theme.Color.primary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(Theme.Color.green.opacity(0.9)))
+            .overlay {
+                if !reduceMotion {
+                    Capsule()
+                        .stroke(Theme.Color.green.opacity(0.8), lineWidth: 2)
+                        .scaleEffect(isBlindConfirmationPulseComplete ? 1.28 : 1)
+                        .opacity(isBlindConfirmationPulseComplete ? 0 : 0.75)
+                        .allowsHitTesting(false)
+                }
+            }
+            .shadow(
+                color: reduceMotion ? .clear : Theme.Color.green.opacity(0.45),
+                radius: isBlindConfirmationPulseComplete ? 5 : 10
+            )
+            .fixedSize()
+            .transition(reduceMotion ? .opacity : .scale(scale: 0.86).combined(with: .opacity))
+            .task(id: message) {
+                isBlindConfirmationPulseComplete = false
+                guard !reduceMotion else { return }
+
+                do {
+                    try await Task.sleep(for: .milliseconds(180))
+                } catch {
+                    return
+                }
+
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeOut(duration: 0.45)) {
+                    isBlindConfirmationPulseComplete = true
+                }
+            }
     }
 
     private var winnerSection: some View {

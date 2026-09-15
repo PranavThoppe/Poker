@@ -158,6 +158,13 @@ struct PlayerStats: Identifiable, Codable {
 
 // MARK: - Game state
 
+/// A one-time public announcement emitted when the host raises the blinds.
+/// The event remains in the synced state so active clients can receive it reliably.
+struct BlindIncreaseAnnouncement: Codable, Equatable {
+    let id: UUID
+    let smallBlind: Int
+}
+
 struct GameState: Codable {
     /// Stable session identifier for this game; encoded in the iMessage bubble URL.
     var gameID: UUID = UUID()
@@ -173,6 +180,8 @@ struct GameState: Codable {
     /// The small blind for the next hand. `nil` preserves the original 5/10 level for rooms
     /// created before configurable blinds were introduced.
     var smallBlind: Int? = nil
+    /// The most recent blind-change announcement. Optional for rooms written before this existed.
+    var blindIncreaseAnnouncement: BlindIncreaseAnnouncement? = nil
     var players: [Player] = []
     var board: [Card?] = Array(repeating: nil, count: 5)
     var pot: Int = 0

@@ -36,6 +36,10 @@ class MessagesViewController: MSMessagesAppViewController {
             self?.startPracticeSession()
         }
 
+        extensionHost.onDismissExtension = { [weak self] in
+            self?.dismiss()
+        }
+
         extensionHost.onboardingDidComplete = { [weak self] in
             guard let self else { return }
             if let url = self.extensionHost.pendingGameURL {
@@ -246,6 +250,7 @@ private final class ExtensionHostModel: ObservableObject {
     var pendingGameURL: URL?
     var onSendToChat: (() -> Void)?
     var onPracticePlay: (() -> Void)?
+    var onDismissExtension: (() -> Void)?
     var onboardingDidComplete: (() -> Void)?
 
     init(gameStore: GameStore) {
@@ -275,7 +280,10 @@ private struct ExtensionShellView: View {
                     onPracticePlay: { model.onPracticePlay?() ?? () }
                 )
             case .game:
-                RootView().environmentObject(model.gameStore)
+                RootView(onExitPractice: {
+                    model.onDismissExtension?()
+                })
+                .environmentObject(model.gameStore)
             }
         }
     }

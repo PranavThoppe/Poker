@@ -25,7 +25,8 @@ struct GameView: View {
             Theme.Color.background.ignoresSafeArea()
 
             VStack(spacing: 0) {
-                Spacer().frame(height: Theme.Spacing.lg)
+                // Leave a clear lane above the player row for the practice exit control.
+                Spacer().frame(height: Theme.Spacing.xl + Theme.Spacing.xs)
 
                 PlayersStripView(
                     players: store.state.players,

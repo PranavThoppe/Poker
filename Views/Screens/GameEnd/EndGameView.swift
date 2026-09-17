@@ -2,10 +2,12 @@ import SwiftUI
 
 struct EndGameView: View {
     @EnvironmentObject var store: GameStore
+    var onDone: (() -> Void)?
 
     private var stats: [PlayerStats] { store.state.endStats }
     private var winner: PlayerStats? { stats.first { $0.isWinner } }
     private var hasWinner: Bool { stats.contains(where: \.isWinner) }
+    private var isPractice: Bool { store.state.gameMode == .practiceVsCPU }
 
     var body: some View {
         ResultsScreenView(
@@ -18,8 +20,16 @@ struct EndGameView: View {
                 : [],
             winnerSubtitle: hasWinner ? "\(winner?.finalStack ?? 0)" : "No winner — tie stands",
             statsSectionTitle: "Results",
-            buttonTitle: "Play Again",
-            onButton: { store.resetToWaiting() }
+            buttonTitle: isPractice && onDone != nil ? "Done" : "Play Again",
+            onButton: {
+                if isPractice, let onDone {
+                    onDone()
+                } else {
+                    store.resetToWaiting()
+                }
+            },
+            secondaryButtonTitle: isPractice && onDone != nil ? "Play Again" : nil,
+            onSecondaryButton: isPractice && onDone != nil ? { store.resetToWaiting() } : nil
         )
     }
 }

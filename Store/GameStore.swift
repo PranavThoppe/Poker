@@ -215,6 +215,13 @@ final class GameStore: ObservableObject {
         return state.activePlayerID == heroID
     }
 
+    /// Largest callable total for the hero this street — own stack capped by the biggest
+    /// live opponent. Feeds the raise slider and the All-in label.
+    var heroMaxRaise: Int {
+        guard let heroID = state.heroID else { return state.raiseAmount }
+        return engine.maxRaiseTotal(state, for: heroID)
+    }
+
     var showdownRevealOrder: [String] {
         engine.showdownRevealOrder(state)
     }
@@ -688,6 +695,11 @@ final class GameStore: ObservableObject {
         cancelShowdownAdvance()
         botScheduler.cancel()
         clearBoardRevealGate()
+        // Credit the pot only after every hand is face up, then mark bust-outs.
+        engine.applyHandResultPayouts(&state)
+        engine.eliminateBrokePlayers(&state)
+        engine.updateHeroDisplay(&state)
+        state.endStats = buildHandSummaryStats()
         let previousPhase = state.phase
         markHandCompletedIfNeeded(previousPhase: previousPhase)
         resetReadyStateForHandSummary()
@@ -1426,7 +1438,7 @@ extension GameStore {
         state.handID = UUID()
         state.bettingRound = .river
         state.players = [
-            Player(id: "hero", name: "You", stack: 520, avatarIndex: 0),
+            Player(id: "hero", name: "You", stack: 480, avatarIndex: 0),
             Player(id: "bot-1", name: "CPU 1", stack: 480, isFolded: true, avatarIndex: 1, isBot: true),
             Player(id: "bot-2", name: "CPU 2", stack: 500, isDealer: true, avatarIndex: 2, isBot: true),
         ]
@@ -1440,6 +1452,7 @@ extension GameStore {
             Card(rank: .four, suit: .spades),
             Card(rank: .three, suit: .clubs)
         ]
+        state.pot = 40
         state.pendingRevealPlayerID = "hero"
         state.activePlayerID = "hero"
         state.lastAggressorID = "hero"
@@ -1453,7 +1466,8 @@ extension GameStore {
             )],
             payouts: ["hero": 40],
             reveals: [],
-            wentToShowdown: true
+            wentToShowdown: true,
+            payoutsApplied: false
         )
         return GameStore(state: state)
     }

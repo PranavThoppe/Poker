@@ -69,11 +69,13 @@ enum HandEvaluator {
 
   // MARK: - Five-card evaluation
 
-  private static func evaluateFive(_ cards: [Card]) -> HandScore {
+      private static func evaluateFive(_ cards: [Card]) -> HandScore {
       let values = cards.map { rankValue($0.rank) }.sorted(by: >)
       let suits = cards.map(\.suit)
-      let isFlush = Set(suits).count == 1
-      let straightHigh = straightHighCard(values: values)
+      // Flush / straight need five cards. Without this, any suited hole cards score as
+      // a flush when evaluateBest routes a preflop (2-card) holding straight here.
+      let isFlush = cards.count == 5 && Set(suits).count == 1
+      let straightHigh = cards.count == 5 ? straightHighCard(values: values) : nil
       let counts = Dictionary(grouping: values, by: { $0 }).mapValues(\.count)
       let groups = counts.sorted {
           if $0.value != $1.value { return $0.value > $1.value }

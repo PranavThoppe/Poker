@@ -122,6 +122,9 @@ struct HandResult: Codable, Equatable {
     var payouts: [String: Int] = [:]
     var reveals: [RevealedHand] = []
     var wentToShowdown: Bool = false
+    /// False while a showdown reveal is in progress — stacks have not received `payouts` yet.
+    /// Defaults to true when decoding older payloads that credited stacks in `distributePots`.
+    var payoutsApplied: Bool = true
 
     var winnerIDs: [String] {
         var seen = Set<String>()
@@ -133,6 +136,42 @@ struct HandResult: Codable, Equatable {
     }
 
     var totalAwarded: Int { payouts.values.reduce(0, +) }
+
+    enum CodingKeys: String, CodingKey {
+        case pots, payouts, reveals, wentToShowdown, payoutsApplied
+    }
+
+    init(
+        pots: [PotAward] = [],
+        payouts: [String: Int] = [:],
+        reveals: [RevealedHand] = [],
+        wentToShowdown: Bool = false,
+        payoutsApplied: Bool = true
+    ) {
+        self.pots = pots
+        self.payouts = payouts
+        self.reveals = reveals
+        self.wentToShowdown = wentToShowdown
+        self.payoutsApplied = payoutsApplied
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        pots = try container.decodeIfPresent([PotAward].self, forKey: .pots) ?? []
+        payouts = try container.decodeIfPresent([String: Int].self, forKey: .payouts) ?? [:]
+        reveals = try container.decodeIfPresent([RevealedHand].self, forKey: .reveals) ?? []
+        wentToShowdown = try container.decodeIfPresent(Bool.self, forKey: .wentToShowdown) ?? false
+        payoutsApplied = try container.decodeIfPresent(Bool.self, forKey: .payoutsApplied) ?? true
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(pots, forKey: .pots)
+        try container.encode(payouts, forKey: .payouts)
+        try container.encode(reveals, forKey: .reveals)
+        try container.encode(wentToShowdown, forKey: .wentToShowdown)
+        try container.encode(payoutsApplied, forKey: .payoutsApplied)
+    }
 }
 
 // MARK: - Per-player hand tracking (session)

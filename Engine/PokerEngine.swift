@@ -108,6 +108,8 @@ struct PokerEngine {
             postBet(&state, playerIndex: idx, amount: owed)
         case .raise(let targetTotal):
             guard targetTotal > state.streetBetLevel else { return false }
+            let maxTotal = maxRaiseTotal(state, for: playerID)
+            guard targetTotal <= maxTotal else { return false }
             let needed = targetTotal - state.players[idx].currentBet
             guard needed > 0, needed <= state.players[idx].stack else { return false }
             let previousLevel = state.streetBetLevel
@@ -181,14 +183,27 @@ struct PokerEngine {
             actions.append(.call(amount: toCall))
         }
 
-        // When the minimum raise is unaffordable, shoving the rest of the stack still is.
-        let maxTotal = player.currentBet + player.stack
+        // Cap at the largest amount any live opponent can cover; betting past that is
+        // uncallable. When the minimum raise is unaffordable, shoving up to the cap still is.
+        let maxTotal = maxRaiseTotal(state, for: playerID)
         let minRaiseTo = state.streetBetLevel + max(state.lastRaiseSize, bigBlind(for: state))
         if maxTotal > state.streetBetLevel {
             actions.append(.raise(amount: min(minRaiseTo, maxTotal)))
         }
 
         return actions
+    }
+
+    /// The most this player can wager and still have it called: the largest total any single
+    /// live opponent can reach. Betting past it is uncallable, so it is not a legal size.
+    func maxRaiseTotal(_ state: GameState, for playerID: String) -> Int {
+        guard let idx = state.players.firstIndex(where: { $0.id == playerID }) else { return 0 }
+        let ownCap = state.players[idx].currentBet + state.players[idx].stack
+        let opponentCaps = state.players
+            .filter { $0.id != playerID && !$0.isFolded && !$0.isEliminated }
+            .map { $0.currentBet + $0.stack }
+        guard let largestOpponent = opponentCaps.max() else { return ownCap }
+        return min(ownCap, largestOpponent)
     }
 
     /// Resolves a betting round that a guest completed without access to the host-owned deck.
@@ -284,6 +299,10 @@ struct PokerEngine {
     /// Awards every pot layer, splitting exact ties and giving leftover chips clockwise
     /// from the seat left of the button. Fold-outs skip evaluation and show no cards.
     mutating func distributePots(_ state: inout GameState, wentToShowdown: Bool) {
+        // Cover the fold-out path that skips resolveCompletedBettingRound, and keep
+        // potBefore measuring only contested chips after any return.
+        returnUncalledBet(&state)
+
         let potBefore = state.pot
         let boardCards = state.board.compactMap { $0 }
         var payouts: [String: Int] = [:]
@@ -324,6 +343,50 @@ struct PokerEngine {
         assert(distributed == potBefore, "pot leaked: awarded \(distributed) of \(potBefore)")
         #endif
 
+        // Showdown: leave chips in the pot and stacks unchanged until every hand is shown.
+        // Fold-outs credit immediately — there is no reveal table.
+        if wentToShowdown {
+            state.handResult = HandResult(
+                pots: awarded,
+                payouts: payouts,
+                reveals: [],
+                wentToShowdown: true,
+                payoutsApplied: false
+            )
+            // Contested chips stay in `pot` so avatar stacks do not reveal the winner yet.
+            state.pot = potBefore
+            clearStreetBets(&state)
+            beginShowdownReveal(&state)
+            return
+        }
+
+        creditPayouts(payouts, to: &state)
+        state.handResult = HandResult(
+            pots: awarded,
+            payouts: payouts,
+            reveals: [],
+            wentToShowdown: false,
+            payoutsApplied: true
+        )
+        state.pot = 0
+        clearStreetBets(&state)
+        eliminateBrokePlayers(&state)
+        state.pendingRevealPlayerID = nil
+        state.activePlayerID = nil
+    }
+
+    /// Moves `handResult.payouts` onto stacks. Idempotent via `payoutsApplied`.
+    @discardableResult
+    mutating func applyHandResultPayouts(_ state: inout GameState) -> Bool {
+        guard var result = state.handResult, !result.payoutsApplied else { return false }
+        creditPayouts(result.payouts, to: &state)
+        result.payoutsApplied = true
+        state.handResult = result
+        state.pot = 0
+        return true
+    }
+
+    private mutating func creditPayouts(_ payouts: [String: Int], to state: inout GameState) {
         for (id, share) in payouts {
             if let idx = state.players.firstIndex(where: { $0.id == id }) {
                 state.players[idx].stack += share
@@ -333,29 +396,39 @@ struct PokerEngine {
             stats.biggestPot = max(stats.biggestPot, share)
             state.handStats[id] = stats
         }
+    }
 
-        var reveals: [RevealedHand] = []
-
-        state.handResult = HandResult(
-            pots: awarded,
-            payouts: payouts,
-            reveals: reveals,
-            wentToShowdown: wentToShowdown
-        )
-        state.pot = 0
-        clearStreetBets(&state)
-
+    /// Marks every seat with no chips as eliminated. Called after fold-outs immediately,
+    /// and after showdown once the reveal table has closed.
+    mutating func eliminateBrokePlayers(_ state: inout GameState) {
         for i in state.players.indices where state.players[i].stack <= 0 && !state.players[i].isEliminated {
             state.players[i].isEliminated = true
             state.players[i].stack = 0
         }
+    }
 
-        if wentToShowdown {
-            beginShowdownReveal(&state)
-        } else {
-            state.pendingRevealPlayerID = nil
-            state.activePlayerID = nil
-        }
+    /// Hands back the portion of the largest contribution that nobody could match. Only the
+    /// top contributor can hold uncalled chips, so heads-up this always levels the
+    /// contributions and a second pot layer can only appear once a third player is involved.
+    private mutating func returnUncalledBet(_ state: inout GameState) {
+        var contributions = state.contributions ?? [:]
+        let positive = contributions.filter { $0.value > 0 }
+        guard positive.count >= 2 else { return }
+
+        let amounts = positive.values.sorted(by: >)
+        let top = amounts[0]
+        let second = amounts[1]
+        let uncalled = top - second
+        guard uncalled > 0,
+              let ownerID = positive.first(where: { $0.value == top })?.key,
+              let idx = state.players.firstIndex(where: { $0.id == ownerID })
+        else { return }
+
+        state.players[idx].stack += uncalled
+        state.players[idx].currentBet = max(0, state.players[idx].currentBet - uncalled)
+        state.pot = max(0, state.pot - uncalled)
+        contributions[ownerID] = top - uncalled
+        state.contributions = contributions
     }
 
     /// Last aggressor first if they are still in, otherwise first live seat left of the button,
@@ -739,6 +812,7 @@ struct PokerEngine {
 
     private mutating func resolveCompletedBettingRound(_ state: inout GameState) {
         guard state.bettingRound == .river else {
+            returnUncalledBet(&state)
             advanceStreet(&state)
             return
         }
@@ -765,6 +839,7 @@ struct PokerEngine {
         )
         #endif
 
+        returnUncalledBet(&state)
         resolveShowdown(&state)
     }
 
@@ -871,16 +946,19 @@ struct PokerEngine {
         state.callAmount = max(0, state.streetBetLevel - heroBet)
         let bigBlind = bigBlind(for: state)
         let minRaiseTo = state.streetBetLevel + max(state.lastRaiseSize, bigBlind)
-        state.raiseAmount = min(minRaiseTo, heroBet + state.players[idx].stack)
+        let maxTotal = maxRaiseTotal(state, for: heroID)
+        state.raiseAmount = min(minRaiseTo, maxTotal)
         if state.raiseAmount <= state.streetBetLevel {
-            state.raiseAmount = min(state.streetBetLevel + bigBlind, heroBet + state.players[idx].stack)
+            state.raiseAmount = min(state.streetBetLevel + bigBlind, maxTotal)
         }
     }
 
     mutating func updateHeroDisplay(_ state: inout GameState) {
         guard let heroID = state.heroID,
               let idx = state.players.firstIndex(where: { $0.id == heroID }) else { return }
-        if state.players[idx].isEliminated || state.players[idx].stack <= 0 {
+        // Only clear cards when the hero is out of the game — an all-in player still
+        // holds a hand and must see it for the rest of the street / showdown.
+        if state.players[idx].isEliminated {
             state.heroHoleCards = []
             state.heroHandRank = nil
             return

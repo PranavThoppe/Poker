@@ -110,13 +110,17 @@ enum PokerEngineVerification {
               let shortIdx = state.players.firstIndex(where: { $0.id == shortID }),
               let otherID = state.players.first(where: { $0.id != shortID })?.id else { return false }
 
-        // Leave the opener too short to cover the raise it is about to face.
+        // Leave the opener too short to cover a full raise, but leave enough that the
+        // opponent can still raise up to the short stack's effective total.
         state.players[shortIdx].stack = 30
 
         let toCall = state.streetBetLevel - state.players[shortIdx].currentBet
         guard engine.applyAction(&state, playerID: shortID, action: .call(amount: toCall)),
-              state.activePlayerID == otherID,
-              engine.applyAction(&state, playerID: otherID, action: .raise(amount: 300)),
+              state.activePlayerID == otherID else { return false }
+
+        let raiseTo = engine.maxRaiseTotal(state, for: otherID)
+        guard raiseTo > state.streetBetLevel,
+              engine.applyAction(&state, playerID: otherID, action: .raise(amount: raiseTo)),
               state.activePlayerID == shortID else { return false }
 
         let legal = engine.legalActions(for: state, playerID: shortID)

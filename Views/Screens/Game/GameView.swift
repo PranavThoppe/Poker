@@ -6,14 +6,8 @@ struct GameView: View {
     @EnvironmentObject var store: GameStore
     @State private var isBoardRevealing = false
 
-    private var hero: Player? {
-        guard let heroID = store.state.heroID else { return nil }
-        return store.state.players.first { $0.id == heroID }
-    }
-
     private var maximumRaiseAmount: Int {
-        guard let hero else { return store.state.raiseAmount }
-        return hero.currentBet + hero.stack
+        store.heroMaxRaise
     }
 
     private var canRaise: Bool {
@@ -355,7 +349,7 @@ struct ActionBarView: View {
 
     var body: some View {
         VStack(spacing: Theme.Spacing.sm) {
-            if showRaiseCustomization {
+            if showRaiseCustomization && canRaise {
                 RaiseCustomizationView(
                     amount: raiseAmountBinding,
                     minimumAmount: raiseAmount,
@@ -371,21 +365,24 @@ struct ActionBarView: View {
                 } else {
                     ActionPill(label: "Call \(callAmount)", action: onCall, isEnabled: actionsEnabled)
                 }
-                RaiseSplitButton(
-                    amount: selectedAmount,
-                    isEnabled: raiseEnabled,
-                    onRaise: {
-                        let amount = selectedAmount
-                        showRaiseCustomization = false
-                        raiseOverride = nil
-                        onRaise(amount)
-                    },
-                    onCustomize: {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            showRaiseCustomization.toggle()
+                if canRaise {
+                    RaiseSplitButton(
+                        amount: selectedAmount,
+                        maximumAmount: maximumRaiseAmount,
+                        isEnabled: raiseEnabled,
+                        onRaise: {
+                            let amount = selectedAmount
+                            showRaiseCustomization = false
+                            raiseOverride = nil
+                            onRaise(amount)
+                        },
+                        onCustomize: {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                showRaiseCustomization.toggle()
+                            }
                         }
-                    }
-                )
+                    )
+                }
                 moreButton
             }
             .frame(height: Theme.Size.actionPillH)
@@ -422,14 +419,19 @@ struct ActionBarView: View {
 
 private struct RaiseSplitButton: View {
     let amount: Int
+    let maximumAmount: Int
     let isEnabled: Bool
     let onRaise: () -> Void
     let onCustomize: () -> Void
 
+    private var label: String {
+        amount >= maximumAmount ? "All in \(amount)" : "Raise to \(amount)"
+    }
+
     var body: some View {
         HStack(spacing: 0) {
             Button(action: onRaise) {
-                Text("Raise to \(amount)")
+                Text(label)
                     .font(Theme.Font.actionLabel)
                     .foregroundStyle(isEnabled ? Theme.Color.primary : Theme.Color.secondary)
                     .lineLimit(1)

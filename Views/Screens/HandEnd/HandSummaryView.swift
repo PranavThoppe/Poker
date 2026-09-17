@@ -73,11 +73,19 @@ struct HandSummaryView: View {
         })
     }
 
+    private var winnerLabel: String {
+        let pots = store.state.handResult?.pots ?? []
+        if pots.contains(where: { $0.winnerIDs.count > 1 }) {
+            return "Split Pot"
+        }
+        return winners.count > 1 ? "Hand Winners" : "Hand Winner"
+    }
+
     var body: some View {
         let canStartNextHand = store.canStartNextHand
         return ResultsScreenView(
             stats: stats,
-            winnerLabel: winners.count > 1 ? "Split Pot" : "Hand Winner",
+            winnerLabel: winnerLabel,
             winners: winners,
             winnerSubtitle: winnerSubtitle,
             statsSectionTitle: "Leaderboard",

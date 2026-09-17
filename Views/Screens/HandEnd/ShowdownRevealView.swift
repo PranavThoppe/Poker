@@ -71,7 +71,7 @@ struct ShowdownRevealView: View {
 
                 BoardView(
                     board: store.state.board,
-                    pot: store.state.lastPotAwarded,
+                    pot: store.state.pot > 0 ? store.state.pot : store.state.lastPotAwarded,
                     streetLabel: "Showdown",
                     highlightedCardIDs: highlightedCardIDs,
                     isRevealing: $isBoardRevealing

@@ -20,9 +20,9 @@ struct EndGameView: View {
                 : [],
             winnerSubtitle: hasWinner ? "\(winner?.finalStack ?? 0)" : "No winner — tie stands",
             statsSectionTitle: "Results",
-            buttonTitle: isPractice && onDone != nil ? "Done" : "Play Again",
+            buttonTitle: onDone != nil ? "Done" : "Play Again",
             onButton: {
-                if isPractice, let onDone {
+                if let onDone {
                     onDone()
                 } else {
                     store.resetToWaiting()

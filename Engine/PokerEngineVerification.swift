@@ -24,7 +24,31 @@ enum PokerEngineVerification {
             && postflopOpenerIsLeftOfButton()
             && foldClosingTurnOpensLiveActor()
             && allInCallOnTurnRunsOutTheBoard()
+            && sittingOutSeatIsSkippedOnNewHand()
+            && sittingOutSeatDoesNotEndSession()
             && PokerEnginePotVerification.runAll()
+    }
+
+    static func sittingOutSeatIsSkippedOnNewHand() -> Bool {
+        var state = fivePlayerState(dealerIndex: 0)
+        state.players[1].isSittingOut = true
+        var engine = PokerEngine()
+        engine.startGame(&state)
+        engine.startHand(&state)
+        let sittingID = state.players[1].id
+        return state.holeCardsByPlayer[sittingID] == nil
+            && state.players[1].currentBet == 0
+            && state.activePlayerID != sittingID
+    }
+
+    static func sittingOutSeatDoesNotEndSession() -> Bool {
+        var state = fivePlayerState(dealerIndex: 0)
+        state.players[1].isSittingOut = true
+        state.players[2].isSittingOut = true
+        state.players[3].isSittingOut = true
+        state.players[4].isSittingOut = true
+        let engine = PokerEngine()
+        return engine.shouldEndGame(state) == false && engine.shouldStartNextHand(state) == false
     }
 
     /// UTG (seat after BB) opens preflop, not BB.

@@ -37,13 +37,17 @@ struct PokerEngine {
     }
 
     mutating func startHand(_ state: inout GameState) {
-        let activeCount = state.players.filter { !$0.isEliminated }.count
-        guard activeCount > 0 else { return }
+        let activeCount = state.players.filter(isEligibleForNewHand).count
+        // Preserve the pre-existing solo Classic lobby flow. Once anyone is sitting out,
+        // however, a lone eligible seat represents a paused multiplayer table, not a hand.
+        guard activeCount >= 2 || !state.players.contains(where: \.isSittingOut) else { return }
 
-        for i in state.players.indices where !state.players[i].isEliminated {
+        for i in state.players.indices {
             state.players[i].isFolded = false
             state.players[i].currentBet = 0
-            state.handStats[state.players[i].id, default: PlayerHandStats()].handsPlayed += 1
+            if isEligibleForNewHand(state.players[i]) {
+                state.handStats[state.players[i].id, default: PlayerHandStats()].handsPlayed += 1
+            }
         }
 
         state.board = Array(repeating: nil, count: 5)
@@ -62,7 +66,7 @@ struct PokerEngine {
         rotateDealer(&state)
 
         var deck = Deck()
-        for idx in state.players.indices where !state.players[idx].isEliminated {
+        for idx in state.players.indices where isEligibleForNewHand(state.players[idx]) {
             let id = state.players[idx].id
             state.holeCardsByPlayer[id] = deck.draw(2)
         }
@@ -221,11 +225,32 @@ struct PokerEngine {
     }
 
     func shouldEndGame(_ state: GameState) -> Bool {
+        // Sitting out is temporary: a session only has a true winner when every other
+        // seated player has actually been eliminated.
         state.players.filter { !$0.isEliminated && $0.stack > 0 }.count <= 1
     }
 
     func shouldStartNextHand(_ state: GameState) -> Bool {
-        !shouldEndGame(state)
+        !shouldEndGame(state) && state.players.filter(isEligibleForNewHand).count >= 2
+    }
+
+    /// Folds a player who chose to sit out. Their existing contribution remains in the pot;
+    /// only their eligibility to win the current hand is removed.
+    @discardableResult
+    mutating func foldForSitOut(_ state: inout GameState, playerID: String) -> Bool {
+        guard let idx = state.players.firstIndex(where: { $0.id == playerID }),
+              !state.players[idx].isEliminated,
+              !state.players[idx].isFolded else { return false }
+        if state.activePlayerID == playerID {
+            return applyAction(&state, playerID: playerID, action: .fold)
+        }
+        state.players[idx].isFolded = true
+        if soleRemainingPlayerIndex(&state) != nil {
+            distributePots(&state, wentToShowdown: false)
+        }
+        syncBettingUI(&state)
+        updateHeroDisplay(&state)
+        return true
     }
 
     // MARK: - Showdown
@@ -602,7 +627,7 @@ struct PokerEngine {
     /// small blind is left of the button and the big blind left of that.
     private func blindIndices(_ state: GameState) -> (smallBlind: Int, bigBlind: Int)? {
         let dealer = dealerIndex(state)
-        let activeCount = state.players.filter { !$0.isEliminated }.count
+        let activeCount = state.players.filter(isEligibleForNewHand).count
         guard activeCount >= 2 else { return nil }
 
         if activeCount == 2 {
@@ -663,7 +688,7 @@ struct PokerEngine {
             if let next = nextActiveIndex(from: current, in: state) {
                 state.players[next].isDealer = true
             }
-        } else if let first = state.players.firstIndex(where: { !$0.isEliminated }) {
+        } else if let first = state.players.firstIndex(where: { isEligibleForNewHand($0) }) {
             state.players[first].isDealer = true
         }
     }
@@ -677,7 +702,7 @@ struct PokerEngine {
         guard count > 0 else { return nil }
         var i = (index + 1) % count
         for _ in 0..<count {
-            if !state.players[i].isEliminated && !state.players[i].isFolded {
+            if isEligibleForNewHand(state.players[i]) && !state.players[i].isFolded {
                 return i
             }
             i = (i + 1) % count
@@ -688,7 +713,7 @@ struct PokerEngine {
     /// True when the player still has a decision to make: in the hand and holding chips.
     private func canAct(_ index: Int, _ state: GameState) -> Bool {
         let player = state.players[index]
-        return !player.isEliminated && !player.isFolded && player.stack > 0
+        return isEligibleForNewHand(player) && !player.isFolded
     }
 
     /// First seat from `index` that can still act, or nil when everyone left is all-in.
@@ -713,7 +738,7 @@ struct PokerEngine {
         let startFrom: Int
         if preFlop, let blinds = blindIndices(state) {
             // Heads-up the button opens; otherwise UTG, the seat left of the big blind.
-            startFrom = state.players.filter { !$0.isEliminated }.count == 2
+            startFrom = state.players.filter(isEligibleForNewHand).count == 2
                 ? blinds.smallBlind
                 : (blinds.bigBlind + 1) % count
         } else {
@@ -733,23 +758,23 @@ struct PokerEngine {
 
     /// Non-nil when all but one player have folded (multi-player fold-out).
     private func soleRemainingPlayerIndex(_ state: inout GameState) -> Int? {
-        let inHand = state.players.filter { !$0.isEliminated }
+        let inHand = state.players.filter(isEligibleForNewHand)
         guard inHand.count > 1 else { return nil }
 
         let remaining = state.players.indices.filter {
-            !state.players[$0].isEliminated && !state.players[$0].isFolded
+            isEligibleForNewHand(state.players[$0]) && !state.players[$0].isFolded
         }
         return remaining.count == 1 ? remaining[0] : nil
     }
 
     private func isBettingRoundComplete(_ state: inout GameState) -> Bool {
         let active = state.players.indices.filter {
-            !state.players[$0].isEliminated && !state.players[$0].isFolded
+            isEligibleForNewHand(state.players[$0]) && !state.players[$0].isFolded
         }
         if active.count <= 1 { return true }
 
         // Solo: one player acts and the street is done.
-        if state.players.filter({ !$0.isEliminated }).count == 1 {
+        if state.players.filter(isEligibleForNewHand).count == 1 {
             return true
         }
 
@@ -781,7 +806,7 @@ struct PokerEngine {
     /// All-in players have no decision left, so a raise must not put them back on the clock.
     private mutating func markAllInPlayersActed(_ state: inout GameState) {
         let allInIDs = state.players
-            .filter { !$0.isEliminated && !$0.isFolded && $0.stack == 0 }
+            .filter { isEligibleForNewHand($0) && !$0.isFolded && $0.stack == 0 }
             .map(\.id)
         for id in allInIDs {
             markActed(&state, playerID: id)
@@ -790,6 +815,10 @@ struct PokerEngine {
 
     private func anyoneCanAct(_ state: GameState) -> Bool {
         state.players.indices.contains { canAct($0, state) }
+    }
+
+    private func isEligibleForNewHand(_ player: Player) -> Bool {
+        !player.isEliminated && !player.isSittingOut && player.stack > 0
     }
 
     /// Puts the action on the opening seat for a street: first live seat left of the button,

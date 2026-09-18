@@ -40,6 +40,11 @@ class MessagesViewController: MSMessagesAppViewController {
             self?.dismiss()
         }
 
+        extensionHost.onCloseClassic = { [weak self] in
+            self?.extensionHost.gameStore.stopMultiplayerSession()
+            self?.dismiss()
+        }
+
         extensionHost.onboardingDidComplete = { [weak self] in
             guard let self else { return }
             if let url = self.extensionHost.pendingGameURL {
@@ -133,6 +138,7 @@ class MessagesViewController: MSMessagesAppViewController {
             applyPresentationStyleForCurrentRoute()
             return
         }
+        extensionHost.gameStore.stopMultiplayerSession()
         extensionHost.gameStore.state = gameState
         extensionHost.gameStore.syncer = SupabaseSync()
         extensionHost.gameStore.isHost = false
@@ -142,6 +148,7 @@ class MessagesViewController: MSMessagesAppViewController {
             avatarIndex: ProfileService.shared.profile?.avatarIndex ?? 0
         )
         extensionHost.gameStore.subscribeToRoom()
+        extensionHost.gameStore.requestRejoinAfterReopening()
         extensionHost.route = .game
         requestPresentationStyle(.expanded)
     }
@@ -154,6 +161,7 @@ class MessagesViewController: MSMessagesAppViewController {
         pendingRouteWorkItem?.cancel()
         pendingRouteWorkItem = nil
         extensionHost.pendingGameURL = nil
+        extensionHost.gameStore.stopMultiplayerSession()
         extensionHost.route = ProfileService.shared.profile == nil ? .onboarding : .gameSelection
     }
    
@@ -186,6 +194,7 @@ class MessagesViewController: MSMessagesAppViewController {
         guard let conversation else { return }
 
         let store = extensionHost.gameStore
+        store.stopMultiplayerSession()
         store.state = GameStore.createNew(mode: .classicPoker)
         store.syncer = SupabaseSync()
         store.isHost = true
@@ -251,6 +260,7 @@ private final class ExtensionHostModel: ObservableObject {
     var onSendToChat: (() -> Void)?
     var onPracticePlay: (() -> Void)?
     var onDismissExtension: (() -> Void)?
+    var onCloseClassic: (() -> Void)?
     var onboardingDidComplete: (() -> Void)?
 
     init(gameStore: GameStore) {
@@ -280,9 +290,10 @@ private struct ExtensionShellView: View {
                     onPracticePlay: { model.onPracticePlay?() ?? () }
                 )
             case .game:
-                RootView(onExitPractice: {
-                    model.onDismissExtension?()
-                })
+                RootView(
+                    onExitPractice: { model.onDismissExtension?() },
+                    onExitClassic: { model.onCloseClassic?() }
+                )
                 .environmentObject(model.gameStore)
             }
         }

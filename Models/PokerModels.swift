@@ -36,9 +36,58 @@ struct Player: Identifiable, Codable, Equatable {
     var isDealer: Bool = false
     var isFolded: Bool = false
     var isEliminated: Bool = false
+    /// A seated player who is temporarily excluded from future hands, but keeps their stack
+    /// and history. Missing in pre-sit-out room payloads means `false`.
+    var isSittingOut: Bool = false
     var currentBet: Int = 0
     var avatarIndex: Int = 0
     var isBot: Bool = false
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, stack, isReady, isDealer, isFolded, isEliminated, isSittingOut
+        case currentBet, avatarIndex, isBot
+    }
+
+    init(
+        id: String,
+        name: String,
+        stack: Int,
+        isReady: Bool = false,
+        isDealer: Bool = false,
+        isFolded: Bool = false,
+        isEliminated: Bool = false,
+        isSittingOut: Bool = false,
+        currentBet: Int = 0,
+        avatarIndex: Int = 0,
+        isBot: Bool = false
+    ) {
+        self.id = id
+        self.name = name
+        self.stack = stack
+        self.isReady = isReady
+        self.isDealer = isDealer
+        self.isFolded = isFolded
+        self.isEliminated = isEliminated
+        self.isSittingOut = isSittingOut
+        self.currentBet = currentBet
+        self.avatarIndex = avatarIndex
+        self.isBot = isBot
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        name = try values.decode(String.self, forKey: .name)
+        stack = try values.decode(Int.self, forKey: .stack)
+        isReady = try values.decodeIfPresent(Bool.self, forKey: .isReady) ?? false
+        isDealer = try values.decodeIfPresent(Bool.self, forKey: .isDealer) ?? false
+        isFolded = try values.decodeIfPresent(Bool.self, forKey: .isFolded) ?? false
+        isEliminated = try values.decodeIfPresent(Bool.self, forKey: .isEliminated) ?? false
+        isSittingOut = try values.decodeIfPresent(Bool.self, forKey: .isSittingOut) ?? false
+        currentBet = try values.decodeIfPresent(Int.self, forKey: .currentBet) ?? 0
+        avatarIndex = try values.decodeIfPresent(Int.self, forKey: .avatarIndex) ?? 0
+        isBot = try values.decodeIfPresent(Bool.self, forKey: .isBot) ?? false
+    }
 }
 
 // MARK: - Game mode

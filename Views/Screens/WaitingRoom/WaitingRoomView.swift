@@ -6,11 +6,12 @@ struct WaitingRoomView: View {
     private var players: [Player] { store.state.players }
     private var heroID: String? { store.state.heroID }
 
-    private var readyCount: Int { players.filter { $0.isReady }.count }
-    private var totalCount: Int { players.count }
+    private var readyCount: Int { players.filter { !$0.isSittingOut && $0.isReady }.count }
+    private var totalCount: Int { players.filter { !$0.isSittingOut }.count }
     private var isHeroReady: Bool {
         guard let id = heroID else { return false }
-        return players.first { $0.id == id }?.isReady ?? false
+        guard let hero = players.first(where: { $0.id == id }), !hero.isSittingOut else { return false }
+        return hero.isReady
     }
 
     var body: some View {
@@ -68,7 +69,9 @@ struct WaitingRoomView: View {
 
     private var bottomBar: some View {
         VStack(spacing: Theme.Spacing.md) {
-            readyButton
+            if !store.isHeroSittingOut {
+                readyButton
+            }
             if store.canStartGame {
                 startButton
             }
@@ -133,7 +136,7 @@ private struct PlayerReadyRow: View {
     }
 
     private var readyPill: some View {
-        Text(player.isReady ? "Ready" : "Waiting")
+        Text(player.isSittingOut ? "Sitting Out" : (player.isReady ? "Ready" : "Waiting"))
             .font(.system(size: 12, weight: .semibold))
             .foregroundStyle(player.isReady ? .green : Theme.Color.secondary)
             .padding(.horizontal, 10)

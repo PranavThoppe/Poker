@@ -27,6 +27,12 @@ struct GameView: View {
                     activePlayerID: store.state.activePlayerID
                 )
 
+                if store.isHeroSittingOut {
+                    Text("Sitting out · Spectating this hand")
+                        .font(Theme.Font.subhead)
+                        .foregroundStyle(Theme.Color.secondary)
+                }
+
                 Spacer()
 
                 BoardView(

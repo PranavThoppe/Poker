@@ -27,6 +27,10 @@ final class GameStore: ObservableObject {
     private var lastShowdownTimeoutID: String?
     private var isFetchingHoleCards = false
     private var isRestoringHostHoleCards = false
+    /// Reopening a room is an intent to return. During a live hand the intent stays local
+    /// until the safe `.handSummary` boundary, then writes one normal roster update.
+    private var shouldRequestRejoinOnRemoteState = false
+    private var pendingRejoinHandID: UUID?
     /// Consecutive watchdog ticks with nobody on the clock.
     private var stalledPollTicks = 0
 
@@ -113,6 +117,7 @@ final class GameStore: ObservableObject {
     func toggleReady() {
         guard let heroID = state.heroID,
               let idx = state.players.firstIndex(where: { $0.id == heroID }) else { return }
+        guard !state.players[idx].isSittingOut else { return }
         if state.phase == .handSummary {
             guard !state.players[idx].isEliminated, state.players[idx].stack > 0 else { return }
         }
@@ -147,6 +152,8 @@ final class GameStore: ObservableObject {
         Task { [weak self] in
             guard let self else { return }
             await self.refreshPlayersFromServer()
+            guard !self.state.players.contains(where: \.isSittingOut)
+                    || self.eligiblePlayerCountForNextHand >= 2 else { return }
             self.engine.startGame(&self.state)
             self.engine.startHand(&self.state)
             if previousPhase == .waiting {
@@ -162,20 +169,29 @@ final class GameStore: ObservableObject {
     }
 
     var allReady: Bool {
-        !state.players.isEmpty && state.players.allSatisfy { $0.isReady }
+        let required = playersRequiredToReadyForNextHand
+        return !required.isEmpty && required.allSatisfy(\.isReady)
+    }
+
+    private var eligiblePlayerCountForNextHand: Int {
+        playersRequiredToReadyForNextHand.count
     }
 
     var canStartGame: Bool {
-        allReady && (state.gameMode != .classicPoker || isHost)
+        allReady
+            && (state.gameMode != .classicPoker || isHost)
+            // Preserve the legacy solo Classic lobby, but do not deal a one-player hand
+            // after other seated players chose to sit out.
+            && (!state.players.contains(where: \.isSittingOut) || eligiblePlayerCountForNextHand >= 2)
     }
 
     var playersRequiredToReadyForNextHand: [Player] {
-        state.players.filter { !$0.isEliminated && $0.stack > 0 }
+        state.players.filter { !$0.isEliminated && !$0.isSittingOut && $0.stack > 0 }
     }
 
     var allReadyForNextHand: Bool {
         let players = playersRequiredToReadyForNextHand
-        return !players.isEmpty && players.allSatisfy(\.isReady)
+        return players.count >= 2 && players.allSatisfy(\.isReady)
     }
 
     var canStartNextHand: Bool {
@@ -212,7 +228,65 @@ final class GameStore: ObservableObject {
 
     var isHeroTurn: Bool {
         guard let heroID = state.heroID else { return false }
-        return state.activePlayerID == heroID
+        return state.activePlayerID == heroID && !isHeroSittingOut
+    }
+
+    var isHeroSittingOut: Bool {
+        guard let heroID = state.heroID else { return false }
+        return state.players.first(where: { $0.id == heroID })?.isSittingOut ?? false
+    }
+
+    /// The X action for an unfinished Classic room. This is intentionally available only to
+    /// an active, non-eliminated local player; elimination remains permanent.
+    func sitOutLocalPlayer() {
+        guard state.gameMode == .classicPoker,
+              let heroID = state.heroID,
+              let index = state.players.firstIndex(where: { $0.id == heroID }),
+              !state.players[index].isEliminated,
+              !state.players[index].isSittingOut else { return }
+
+        if state.phase == .playing {
+            _ = engine.foldForSitOut(&state, playerID: heroID)
+        } else if state.phase == .showdown,
+                  state.pendingRevealPlayerID == heroID {
+            // A reveal order cannot wait for a player who is closing the extension. Record
+            // their already-dealt hand before changing presentation to spectator mode.
+            showCards(for: heroID, auto: true)
+        }
+        state.players[index].isSittingOut = true
+        state.players[index].isReady = false
+        state.heroHoleCards = []
+        state.heroHandRank = nil
+
+        // A host can resolve a fold-out immediately. Guests publish their folded snapshot;
+        // the host will resolve it on the next subscription tick.
+        if isHost, state.phase == .playing, state.activePlayerID == nil {
+            resolveHostPendingState()
+        }
+        publishCurrentState()
+    }
+
+    /// Called when this device opens an existing Classic room. A sitting-out player returns
+    /// at a summary/waiting boundary, or spectates the hand already underway.
+    func requestRejoinAfterReopening() {
+        guard state.gameMode == .classicPoker else { return }
+        shouldRequestRejoinOnRemoteState = true
+        reconcileLocalParticipation()
+    }
+
+    /// Stops only this extension's polling and local scheduled work. It never writes a room
+    /// mutation, so Classic Done and sit-out dismissal cannot end a shared game.
+    func stopMultiplayerSession() {
+        guard state.gameMode == .classicPoker else { return }
+        syncer.unsubscribe(roomID: state.gameID.uuidString)
+        holeCardRetryTask?.cancel()
+        holeCardRetryTask = nil
+        stalledHandTask?.cancel()
+        stalledHandTask = nil
+        showdownTimeoutTask?.cancel()
+        showdownTimeoutTask = nil
+        cancelShowdownAdvance()
+        clearBoardRevealGate()
     }
 
     /// Largest callable total for the hero this street — own stack capped by the biggest
@@ -251,7 +325,7 @@ final class GameStore: ObservableObject {
     private var isHeroEligibleForHoleCards: Bool {
         guard let heroID = state.heroID,
               let player = state.players.first(where: { $0.id == heroID }) else { return false }
-        return !player.isEliminated && player.stack > 0
+        return !player.isEliminated && !player.isSittingOut && player.stack > 0
     }
 
     private func beginHandPhase(from previousPhase: GamePhase) {
@@ -287,6 +361,7 @@ final class GameStore: ObservableObject {
     func showCards(for playerID: String? = nil, auto: Bool = false) {
         guard state.phase == .showdown else { return }
         guard let id = playerID ?? state.heroID else { return }
+        if state.players.first(where: { $0.id == id })?.isSittingOut == true, !auto { return }
         // Classic guests may only show themselves. Practice owns every bot locally.
         if state.gameMode == .classicPoker, !isHost, id != state.heroID { return }
 
@@ -388,6 +463,7 @@ final class GameStore: ObservableObject {
                 Task { [weak self] in
                     guard let self else { return }
                     await self.refreshPlayersFromServer()
+                    guard self.allReadyForNextHand else { return }
                     self.engine.startHand(&self.state)
                     GameLog.nextHandStarted(state: self.state)
                     self.beginHandPhase(from: previousPhase)
@@ -428,6 +504,7 @@ final class GameStore: ObservableObject {
                 np.isReady = false
                 np.isFolded = false
                 np.isEliminated = false
+                np.isSittingOut = false
                 np.isDealer = false
                 np.currentBet = 0
                 np.stack = PokerEngine.startingStack
@@ -476,6 +553,7 @@ final class GameStore: ObservableObject {
             }
 
             self.mergeRemoteState(remoteState, remoteHostID: remoteHostID)
+            self.reconcileLocalParticipation()
 
             if heroAbsent {
                 self.publishCurrentState()
@@ -618,6 +696,7 @@ final class GameStore: ObservableObject {
         markHandCompletedIfNeeded(previousPhase: previousPhase)
         resetReadyStateForHandSummary()
         state.phase = .handSummary
+        reconcileLocalParticipation()
         GameLog.phaseChanged(from: previousPhase, to: .handSummary, state: state)
         GameLog.handSummaryOpened(state: state)
     }
@@ -704,6 +783,7 @@ final class GameStore: ObservableObject {
         markHandCompletedIfNeeded(previousPhase: previousPhase)
         resetReadyStateForHandSummary()
         state.phase = .handSummary
+        reconcileLocalParticipation()
         GameLog.phaseChanged(from: previousPhase, to: .handSummary, state: state)
         GameLog.handSummaryOpened(state: state)
         publishCurrentState()
@@ -713,6 +793,48 @@ final class GameStore: ObservableObject {
         guard state.gameMode == .classicPoker else { return }
         for index in state.players.indices {
             state.players[index].isReady = false
+        }
+    }
+
+    /// Applies a local reopen request once the room reaches a hand boundary. Repeated poll
+    /// updates are harmless: after activation both intent markers are cleared.
+    private func reconcileLocalParticipation() {
+        guard state.gameMode == .classicPoker,
+              let heroID = state.heroID,
+              let index = state.players.firstIndex(where: { $0.id == heroID }),
+              !state.players[index].isEliminated else {
+            shouldRequestRejoinOnRemoteState = false
+            pendingRejoinHandID = nil
+            return
+        }
+
+        let wantsToRejoin = shouldRequestRejoinOnRemoteState || pendingRejoinHandID != nil
+        guard wantsToRejoin, state.players[index].isSittingOut else {
+            // Before the first poll our temporary join record says "not sitting out".
+            // Keep the reopen intent until the authoritative roster has arrived.
+            if hasReceivedInitialRoomState && !state.players[index].isSittingOut {
+                shouldRequestRejoinOnRemoteState = false
+                pendingRejoinHandID = nil
+            }
+            return
+        }
+
+        switch state.phase {
+        case .waiting, .handSummary:
+            state.players[index].isSittingOut = false
+            state.players[index].isReady = false
+            state.heroHoleCards = []
+            state.heroHandRank = nil
+            shouldRequestRejoinOnRemoteState = false
+            pendingRejoinHandID = nil
+            publishCurrentState()
+        case .playing, .showdown:
+            pendingRejoinHandID = state.handID
+            shouldRequestRejoinOnRemoteState = false
+            state.heroHoleCards = []
+            state.heroHandRank = nil
+        case .ended:
+            break
         }
     }
 
@@ -935,7 +1057,7 @@ final class GameStore: ObservableObject {
 
         if isNewHand {
             let heroOut = state.players.first(where: { $0.id == heroID })
-                .map { $0.isEliminated || $0.stack <= 0 } ?? true
+                .map { $0.isEliminated || $0.isSittingOut || $0.stack <= 0 } ?? true
             if heroOut || !isHost {
                 state.heroHoleCards = []
             } else if let dealt = savedHoleCards[heroID], dealt.count == 2 {
@@ -1274,6 +1396,7 @@ final class GameStore: ObservableObject {
                     state.players[idx].isReady = remotePlayer.isReady
                 }
                 state.players[idx].isEliminated = remotePlayer.isEliminated
+                state.players[idx].isSittingOut = remotePlayer.isSittingOut
                 if remotePlayer.stack > 0 || remotePlayer.isEliminated {
                     state.players[idx].stack = remotePlayer.stack
                 }

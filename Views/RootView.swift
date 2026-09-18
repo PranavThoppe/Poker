@@ -3,6 +3,7 @@ import SwiftUI
 struct RootView: View {
     @EnvironmentObject var store: GameStore
     var onExitPractice: (() -> Void)?
+    var onExitClassic: (() -> Void)?
 
     @State private var isShowingLeaveConfirmation = false
 
@@ -11,6 +12,14 @@ struct RootView: View {
             && store.state.phase != .ended
             && onExitPractice != nil
     }
+
+    private var canExitClassic: Bool {
+        store.state.gameMode == .classicPoker
+            && store.state.phase != .ended
+            && onExitClassic != nil
+    }
+
+    private var canExit: Bool { canExitPractice || canExitClassic }
 
     var body: some View {
         ZStack {
@@ -31,14 +40,14 @@ struct RootView: View {
                     HandSummaryView()
                         .transition(.opacity)
                 case .ended:
-                    EndGameView(onDone: onExitPractice)
+                    EndGameView(onDone: store.state.gameMode == .classicPoker ? onExitClassic : onExitPractice)
                         .transition(.opacity)
                 }
             }
             .animation(.easeInOut(duration: 0.3), value: store.state.phase)
         }
         .overlay(alignment: .topTrailing) {
-            if canExitPractice {
+            if canExit {
                 Button {
                     isShowingLeaveConfirmation = true
                 } label: {
@@ -55,17 +64,24 @@ struct RootView: View {
                 .buttonStyle(.plain)
                 .padding(.top, Theme.Spacing.xs)
                 .padding(.trailing, Theme.Spacing.sm)
-                .accessibilityLabel("Leave practice game")
+                .accessibilityLabel(canExitClassic ? "Sit out of game" : "Leave practice game")
             }
         }
-        .alert("Leave this game?", isPresented: $isShowingLeaveConfirmation) {
+        .alert(canExitClassic ? "Sit out?" : "Leave this game?", isPresented: $isShowingLeaveConfirmation) {
             Button("Stay", role: .cancel) {}
-            Button("Leave", role: .destructive) {
-                store.resetToWaiting()
-                onExitPractice?()
+            Button(canExitClassic ? "Sit Out" : "Leave", role: .destructive) {
+                if canExitClassic {
+                    store.sitOutLocalPlayer()
+                    onExitClassic?()
+                } else {
+                    store.resetToWaiting()
+                    onExitPractice?()
+                }
             }
         } message: {
-            Text("Your current practice game will end.")
+            Text(canExitClassic
+                ? "Other players can continue. You can rejoin before a later hand."
+                : "Your current practice game will end.")
         }
     }
 }

@@ -69,12 +69,12 @@ enum GameLog {
             record("dealerAssigned", state: state, playerID: dealerID)
         }
 
-        for player in state.players where !player.isEliminated {
+        for player in state.players where !player.isEliminated && !player.isSittingOut {
             record("holeCardsDealt", state: state, playerID: player.id, cardCount: 2)
         }
 
         let blindPlayers = state.players
-            .filter { !$0.isEliminated && $0.currentBet > 0 }
+            .filter { !$0.isEliminated && !$0.isSittingOut && $0.currentBet > 0 }
             .sorted { $0.currentBet < $1.currentBet }
 
         if let sb = blindPlayers.first {
@@ -536,8 +536,9 @@ enum GameLog {
     private static func handSnapshot(_ state: GameState, label: String) -> String {
         let active = state.activePlayerID ?? "nil"
         let dealer = state.players.first(where: { $0.isDealer })?.id ?? "nil"
+        let sittingOut = state.players.filter(\.isSittingOut).count
         var line =
-            "\(label) | players=\(state.players.count) pot=\(state.pot) "
+            "\(label) | players=\(state.players.count) sittingOut=\(sittingOut) pot=\(state.pot) "
             + "street=\(state.bettingRound.displayName) active=\(active) "
             + "phase=\(state.phase) dealer=\(dealer)"
         if let result = state.handResult, result.totalAwarded > 0 {

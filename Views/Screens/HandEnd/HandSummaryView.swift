@@ -51,7 +51,7 @@ struct HandSummaryView: View {
     }
 
     private var activePlayers: [Player] {
-        store.state.players.filter { !$0.isEliminated && $0.stack > 0 }
+        store.playersRequiredToReadyForNextHand
     }
 
     private var readyCountDetail: String? {
@@ -66,6 +66,8 @@ struct HandSummaryView: View {
             let status: PlayerReadyStatus
             if player.isEliminated || player.stack <= 0 {
                 status = .out
+            } else if player.isSittingOut {
+                status = .waiting
             } else {
                 status = player.isReady ? .ready : .waiting
             }

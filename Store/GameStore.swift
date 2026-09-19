@@ -1036,9 +1036,9 @@ final class GameStore: ObservableObject {
         presentBlindIncreaseConfirmation(smallBlind: announcement.smallBlind)
     }
 
-    /// Merges a remote `GameState` into local state while preserving per-client private data:
-    /// the hero's identity, their hole cards, and the host's full `holeCardsByPlayer` map.
-    /// Public fields including `handResult` come from remote (version-wins).
+    /// Merges a viewer-scoped server snapshot. `heroHoleCards` belongs to the
+    /// current viewer and is authoritative; the server never returns a deck or
+    /// another player's cards.
     private func mergeRemoteState(_ remote: GameState, remoteHostID: String?) {
         var remote = remote
         // A command response can land while an older room-state request is
@@ -1061,9 +1061,6 @@ final class GameStore: ObservableObject {
             return
         }
         let heroPlayer       = state.players.first(where: { $0.id == heroID })
-        let savedHeroCards   = state.heroHoleCards
-        let savedHoleCards   = state.holeCardsByPlayer
-        let savedDeck        = state.remainingDeck
         let isNewHand        = state.handID != remote.handID
         let heroWasMissing   = !remote.players.contains(where: { $0.id == heroID })
         let rankBefore       = state.heroHandRank
@@ -1079,25 +1076,7 @@ final class GameStore: ObservableObject {
         }
 
         if isNewHand {
-            let heroOut = state.players.first(where: { $0.id == heroID })
-                .map { $0.isEliminated || $0.isSittingOut || $0.stack <= 0 } ?? true
-            if heroOut || !isHost {
-                state.heroHoleCards = []
-            } else if let dealt = savedHoleCards[heroID], dealt.count == 2 {
-                state.heroHoleCards = dealt
-            } else {
-                state.heroHoleCards = []
-            }
             clearBoardRevealGate()
-        } else if !savedHeroCards.isEmpty {
-            state.heroHoleCards = savedHeroCards
-        }
-
-        if isHost {
-            state.holeCardsByPlayer = savedHoleCards
-            if !savedDeck.isEmpty {
-                state.remainingDeck = savedDeck
-            }
         }
 
         if heroWasMissing, let hero = heroPlayer {

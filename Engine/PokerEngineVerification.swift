@@ -11,6 +11,7 @@ enum PokerEngineVerification {
             && headsUpButtonPostsSmallBlind()
             && shortStackCanCallAllIn()
             && allInPlayerIsNotAskedToAct()
+            && minimumReraiseMatchesPreviousRaise()
             && streetsDealtWithoutStoredDeck()
             && stalledHandIsRecoverable()
             && bettingUIIsLocalToHero()
@@ -71,6 +72,27 @@ enum PokerEngineVerification {
         engine.startGame(&state)
         engine.startHand(&state)
         return state.actedThisStreet.isEmpty && state.pot == 15
+    }
+
+    /// A re-raise must add at least the size of the preceding raise, unless the
+    /// player is all-in. Thus, after a raise from 100 to 300, the next raise is
+    /// at least to 500—not merely any amount above 300.
+    static func minimumReraiseMatchesPreviousRaise() -> Bool {
+        var state = GameState()
+        state.phase = .playing
+        state.players = [
+            Player(id: "raiser", name: "Raiser", stack: 900, currentBet: 300, avatarIndex: 0),
+            Player(id: "caller", name: "Caller", stack: 900, currentBet: 100, avatarIndex: 1),
+        ]
+        state.streetBetLevel = 300
+        state.lastRaiseSize = 200
+        state.activePlayerID = "caller"
+
+        var engine = PokerEngine()
+        guard !engine.applyAction(&state, playerID: "caller", action: .raise(amount: 400)) else {
+            return false
+        }
+        return engine.applyAction(&state, playerID: "caller", action: .raise(amount: 500))
     }
 
     /// After a limp to the big blind, BB still has action (e.g. can raise).

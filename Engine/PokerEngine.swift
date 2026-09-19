@@ -116,13 +116,23 @@ struct PokerEngine {
             guard targetTotal <= maxTotal else { return false }
             let needed = targetTotal - state.players[idx].currentBet
             guard needed > 0, needed <= state.players[idx].stack else { return false }
+            // In no-limit, a raise must increase the wager by at least the size of
+            // the prior full bet or raise. A player who cannot reach that amount may
+            // still move all-in for less.
+            let minRaiseTo = state.streetBetLevel + max(state.lastRaiseSize, bigBlind(for: state))
+            let allInTotal = state.players[idx].currentBet + state.players[idx].stack
+            guard targetTotal >= minRaiseTo || targetTotal == allInTotal else { return false }
             let previousLevel = state.streetBetLevel
             postBet(&state, playerIndex: idx, amount: needed)
             if targetTotal > previousLevel {
-                state.lastRaiseSize = targetTotal - previousLevel
                 state.streetBetLevel = targetTotal
-                state.lastAggressorID = playerID
-                resetActed(&state, except: playerID)
+                // A short all-in changes the amount to call, but it is not a full
+                // raise and therefore does not reset action for prior callers.
+                if targetTotal - previousLevel >= max(state.lastRaiseSize, bigBlind(for: state)) {
+                    state.lastRaiseSize = targetTotal - previousLevel
+                    state.lastAggressorID = playerID
+                    resetActed(&state, except: playerID)
+                }
             }
         }
 
@@ -191,8 +201,11 @@ struct PokerEngine {
         // uncallable. When the minimum raise is unaffordable, shoving up to the cap still is.
         let maxTotal = maxRaiseTotal(state, for: playerID)
         let minRaiseTo = state.streetBetLevel + max(state.lastRaiseSize, bigBlind(for: state))
-        if maxTotal > state.streetBetLevel {
+        let allInTotal = player.currentBet + player.stack
+        if maxTotal >= minRaiseTo {
             actions.append(.raise(amount: min(minRaiseTo, maxTotal)))
+        } else if allInTotal == maxTotal, maxTotal > state.streetBetLevel {
+            actions.append(.raise(amount: maxTotal))
         }
 
         return actions

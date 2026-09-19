@@ -333,7 +333,6 @@ struct ActionBarView: View {
     let onRaise: (Int) -> Void
     let onFold: () -> Void
 
-    @State private var showOptions = false
     @State private var showRaiseCustomization = false
     /// `nil` means use the engine's current min-raise; set only while customizing this decision.
     @State private var raiseOverride: Int?
@@ -401,7 +400,7 @@ struct ActionBarView: View {
                         }
                     )
                 }
-                moreButton
+                foldButton
             }
             .frame(height: Theme.Size.actionPillH)
         }
@@ -417,21 +416,18 @@ struct ActionBarView: View {
         }
     }
 
-    private var moreButton: some View {
-        Button(action: { showOptions.toggle() }) {
-            Image(systemName: showOptions ? "chevron.down" : "chevron.up")
-                .font(.system(size: 16, weight: .semibold))
+    private var foldButton: some View {
+        Button(action: onFold) {
+            Text("Fold")
+                .font(.system(size: 12, weight: .bold, design: .rounded))
                 .foregroundStyle(Theme.Color.primary)
                 .frame(width: Theme.Size.actionPillH, height: Theme.Size.actionPillH)
-                .background(Theme.Color.surface)
+                .background(actionsEnabled ? Theme.Color.red : Theme.Color.surface)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.pill))
         }
         .disabled(!actionsEnabled)
         .opacity(actionsEnabled ? 1 : 0.4)
-        .confirmationDialog("More Options", isPresented: $showOptions, titleVisibility: .hidden) {
-            Button("Fold", role: .destructive) { onFold() }
-            Button("Cancel", role: .cancel) {}
-        }
+        .accessibilityLabel("Fold hand")
     }
 }
 

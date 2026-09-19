@@ -1,7 +1,6 @@
 import Foundation
 
-/// Protocol that any real-time sync backend must conform to.
-/// Today only `MockSync` exists; a `SupabaseSync` will implement this later.
+/// Read-only game-state subscription backend.
 protocol GameSyncing: AnyObject {
     /// Subscribe to state changes from remote players.
     /// The closure is called on the main actor whenever a new state arrives.
@@ -12,12 +11,6 @@ protocol GameSyncing: AnyObject {
 
     /// Tear down the subscription.
     func unsubscribe(roomID: String)
-}
-
-/// Transitional compatibility for practice/legacy UI paths. Classic Poker no
-/// longer implements this writer; mutations use `GameCommandClient` instead.
-extension GameSyncing {
-    func publish(state: GameState, roomID: String) {}
 }
 
 // MARK: - Message URL (iMessage bubble)

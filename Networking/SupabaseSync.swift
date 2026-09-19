@@ -26,7 +26,6 @@ final class SupabaseSync: GameSyncing {
         pollTask = Task { [weak self] in
             guard self != nil else { return }
             var lastSeenVersion: Int? = nil
-            var lastSeenUpdatedAt: String? = nil
 
             func fetchOnce() async {
                 do {
@@ -41,7 +40,6 @@ final class SupabaseSync: GameSyncing {
                         if version == seen { return }
                     }
                     lastSeenVersion = version
-                    lastSeenUpdatedAt = String(version)
                     await MainActor.run {
                         GameLog.remoteStateReceived(state: remote)
                     }
@@ -66,37 +64,4 @@ final class SupabaseSync: GameSyncing {
         GameLog.subscriptionStopped(roomID: roomID)
     }
 
-    // Private cards are intentionally unavailable here; `room-state` provides
-    // only the current viewer's cards.
-
-    /// Host writes each player's private hole cards after dealing.
-    func upsertHoleCards(
-        roomID: String,
-        playerID: String,
-        handID: UUID,
-        cards: [Card]
-    ) async throws {
-        throw GameAPIClientError.server(status: 410, code: "legacy_private_card_write_disabled", message: nil)
-    }
-
-    /// Removes every private-card row for the room before a new deal is written.
-    func deleteAllHoleCards(roomID: String) async throws {
-        // Kept as a compatibility shim while old rooms are readable. New
-        // server-authoritative rooms keep cards solely in private_state.
-    }
-
-    /// Guest fetches their own hole cards after the host has dealt.
-    func fetchHoleCards(roomID: String, playerID: String, handID: UUID) async throws -> [Card]? {
-        return nil
-    }
-
-    /// Host recovery: re-reads every seat's cards so a relaunched host can still run a showdown.
-    func fetchAllHoleCards(roomID: String, handID: UUID) async throws -> [String: [Card]] {
-        return [:]
-    }
-
-    // MARK: - Private
-
 }
-
-// MARK: - Private Decodable row type

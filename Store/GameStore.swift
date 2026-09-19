@@ -14,14 +14,13 @@ final class GameStore: ObservableObject {
 
     /// Sync backend; replaced with `SupabaseSync()` for classic multiplayer sessions.
     var syncer: GameSyncing = MockSync()
-    /// True on the device that created the game room (runs the engine authoritatively).
+    /// True on the device that created the game room.
     var isHost: Bool = false
 
     private var engine = PokerEngine()
     private let botScheduler = BotTurnScheduler()
     private var botSessionConfig = BotSessionConfig.default
     private var botStrategy: BotStrategy = makeStrategy(for: .default)
-    private var holeCardRetryTask: Task<Void, Never>?
     private var stalledHandTask: Task<Void, Never>?
     private var showdownTimeoutTask: Task<Void, Never>?
     private var showdownAdvanceTask: Task<Void, Never>?
@@ -30,8 +29,6 @@ final class GameStore: ObservableObject {
     private var lastHandledBlindIncreaseAnnouncementID: UUID?
     private var hasReceivedInitialRoomState = false
     private var lastShowdownTimeoutID: String?
-    private var isFetchingHoleCards = false
-    private var isRestoringHostHoleCards = false
     /// Reopening a room is an intent to return. During a live hand the intent stays local
     /// until the safe `.handSummary` boundary, then writes one normal roster update.
     private var shouldRequestRejoinOnRemoteState = false
@@ -60,7 +57,6 @@ final class GameStore: ObservableObject {
     }
 
     deinit {
-        holeCardRetryTask?.cancel()
         stalledHandTask?.cancel()
         showdownTimeoutTask?.cancel()
         showdownAdvanceTask?.cancel()
@@ -105,9 +101,6 @@ final class GameStore: ObservableObject {
             if state.heroID == nil {
                 state.heroID = state.players[existing].id
             }
-            if state.gameMode == .classicPoker {
-                publishCurrentState()
-            }
             return
         }
         state.players.append(Player(id: playerID, name: name, stack: PokerEngine.startingStack, avatarIndex: avatarIndex))
@@ -115,9 +108,6 @@ final class GameStore: ObservableObject {
             state.heroID = playerID
         }
         GameLog.playerJoined(playerID: playerID, state: state)
-        if state.gameMode == .classicPoker {
-            publishCurrentState()
-        }
     }
 
     /// Room entry APIs are deliberately separate from local `joinGame`, which
@@ -150,13 +140,11 @@ final class GameStore: ObservableObject {
             isReady: state.players[idx].isReady,
             state: state
         )
-        publishCurrentState()
     }
 
     func startGame() {
         if state.gameMode == .classicPoker { submit(.startGame); return }
         guard !state.players.isEmpty else { return }
-        guard state.gameMode != .classicPoker || isHost else { return }
         let previousPhase = state.phase
         if state.gameMode == .practiceVsCPU {
             seedBots()
@@ -167,29 +155,11 @@ final class GameStore: ObservableObject {
             }
             GameLog.logHandStarted(state: state)
             beginHandPhase(from: previousPhase)
-            publishCurrentState()
             scheduleBotTurnIfNeeded()
             scheduleBotShowIfNeeded()
             return
         }
 
-        Task { [weak self] in
-            guard let self else { return }
-            await self.refreshPlayersFromServer()
-            guard !self.state.players.contains(where: \.isSittingOut)
-                    || self.eligiblePlayerCountForNextHand >= 2 else { return }
-            self.engine.startGame(&self.state)
-            self.engine.startHand(&self.state)
-            if previousPhase == .waiting {
-                GameLog.gameStarted(state: self.state)
-            }
-            GameLog.logHandStarted(state: self.state)
-            self.beginHandPhase(from: previousPhase)
-            guard await self.writeHoleCardsToSupabase() else { return }
-            self.publishCurrentState()
-            self.scheduleBotTurnIfNeeded()
-            self.scheduleBotShowIfNeeded()
-        }
     }
 
     var allReady: Bool {
@@ -248,7 +218,6 @@ final class GameStore: ObservableObject {
             lastHandledBlindIncreaseAnnouncementID = announcement.id
         }
         presentBlindIncreaseConfirmation(smallBlind: newSmallBlind)
-        publishCurrentState()
     }
 
     var isHeroTurn: Bool {
@@ -289,7 +258,6 @@ final class GameStore: ObservableObject {
         if isHost, state.phase == .playing, state.activePlayerID == nil {
             resolveHostPendingState()
         }
-        publishCurrentState()
     }
 
     /// Called when this device opens an existing Classic room. A sitting-out player returns
@@ -305,8 +273,6 @@ final class GameStore: ObservableObject {
     func stopMultiplayerSession() {
         guard state.gameMode == .classicPoker else { return }
         syncer.unsubscribe(roomID: state.gameID.uuidString)
-        holeCardRetryTask?.cancel()
-        holeCardRetryTask = nil
         stalledHandTask?.cancel()
         stalledHandTask = nil
         showdownTimeoutTask?.cancel()
@@ -340,7 +306,8 @@ final class GameStore: ObservableObject {
         return deciderID == heroID
     }
 
-    /// True while a classic guest is waiting for the host to write this hand's private cards.
+    /// True while an eligible player is waiting for their private cards in the
+    /// next server snapshot.
     var isWaitingForHoleCards: Bool {
         guard state.gameMode == .classicPoker else { return false }
         guard state.phase == .playing || state.phase == .showdown else { return false }
@@ -409,14 +376,12 @@ final class GameStore: ObservableObject {
 
         if state.pendingRevealPlayerID == nil {
             lastShowdownTimeoutID = nil
-            publishCurrentState()
             showdownTimeoutTask?.cancel()
             scheduleShowdownAdvanceIfNeeded()
         } else {
             lastShowdownTimeoutID = nil
             scheduleBotShowIfNeeded()
             restartShowdownTimeout()
-            publishCurrentState()
         }
     }
 
@@ -441,7 +406,6 @@ final class GameStore: ObservableObject {
             if state.manualFinishTieAttempts == 0 {
                 state.manualFinishTieAttempts += 1
                 showManualFinishTieWarning = true
-                publishCurrentState()
                 return
             }
             endGame(reason: .manualFinishTieForfeit)
@@ -473,44 +437,20 @@ final class GameStore: ObservableObject {
             completedHands: state.completedHandCount
         )
 
-        publishCurrentState()
     }
 
     func continueAfterHandSummary() {
         if state.gameMode == .classicPoker { submit(.startNextHand); return }
         guard state.phase == .handSummary else { return }
-        if state.gameMode == .classicPoker {
-            guard isHost else {
-                GameLog.guestContinueBlocked(state: state)
-                return
-            }
-            guard sessionEndsAfterHandSummary || allReadyForNextHand else { return }
-        }
         if engine.shouldEndGame(state) {
             endGame(reason: .autoLastStanding)
         } else {
             let previousPhase = state.phase
-            if state.gameMode == .classicPoker {
-                Task { [weak self] in
-                    guard let self else { return }
-                    await self.refreshPlayersFromServer()
-                    guard self.allReadyForNextHand else { return }
-                    self.engine.startHand(&self.state)
-                    GameLog.nextHandStarted(state: self.state)
-                    self.beginHandPhase(from: previousPhase)
-                    guard await self.writeHoleCardsToSupabase() else { return }
-                    self.publishCurrentState()
-                    self.scheduleBotTurnIfNeeded()
-                    self.scheduleBotShowIfNeeded()
-                }
-            } else {
-                engine.startHand(&state)
-                GameLog.nextHandStarted(state: state)
-                beginHandPhase(from: previousPhase)
-                publishCurrentState()
-                scheduleBotTurnIfNeeded()
-                scheduleBotShowIfNeeded()
-            }
+            engine.startHand(&state)
+            GameLog.nextHandStarted(state: state)
+            beginHandPhase(from: previousPhase)
+            scheduleBotTurnIfNeeded()
+            scheduleBotShowIfNeeded()
         }
     }
 
@@ -548,7 +488,6 @@ final class GameStore: ObservableObject {
         state = fresh
         GameLog.phaseChanged(from: previousPhase, to: .waiting, state: state)
         GameLog.gameReset(state: state)
-        publishCurrentState()
     }
 
     /// Configures remote debug logging for a Classic Poker room session.
@@ -564,7 +503,6 @@ final class GameStore: ObservableObject {
     func subscribeToRoom() {
         configureDebugLogging()
         startRoomSubscription()
-        startHoleCardRetryLoop()
         startStalledHandWatchdog()
     }
 
@@ -577,19 +515,8 @@ final class GameStore: ObservableObject {
         syncer.subscribe(roomID: roomID) { [weak self] remoteState, remoteHostID in
             guard let self else { return }
 
-            let heroAbsent: Bool
-            if let heroID = self.state.heroID {
-                heroAbsent = !remoteState.players.contains(where: { $0.id == heroID })
-            } else {
-                heroAbsent = false
-            }
-
             self.mergeRemoteState(remoteState, remoteHostID: remoteHostID)
             self.reconcileLocalParticipation()
-
-            if heroAbsent {
-                self.publishCurrentState()
-            }
 
             if self.isHost,
                self.state.phase == .playing,
@@ -599,14 +526,6 @@ final class GameStore: ObservableObject {
 
             self.stalledPollTicks = 0
         }
-    }
-
-    /// Fire-and-forget publish of the current state. No-op in practice mode.
-    func publishCurrentState() {
-        guard state.gameMode == .classicPoker else { return }
-        guard state.hostID != nil else { return }
-        state.stateVersion = state.version + 1
-        syncer.publish(state: state, roomID: state.gameID.uuidString)
     }
 
     // MARK: - Private
@@ -732,7 +651,6 @@ final class GameStore: ObservableObject {
             // Guest finished a street without the deck; wait for the host to deal.
             if state.gameMode == .classicPoker && !isHost && state.holeCardsByPlayer.isEmpty {
                 GameLog.showdownDeferredToHost(state: state)
-                publishCurrentState()
                 return
             }
             // Prefer resolving/recovering a closed street over jumping to hand summary.
@@ -765,7 +683,6 @@ final class GameStore: ObservableObject {
             let dealtNewStreet = streetBefore != state.bettingRound && state.handResult == nil
             scheduleBotTurnIfNeeded(afterBoardDeal: dealtNewStreet)
         }
-        publishCurrentState()
     }
 
     private func finalizeHandIfNeeded(before: GameLog.ActionSnapshot? = nil, fromRemotePoll: Bool = false) {
@@ -890,7 +807,6 @@ final class GameStore: ObservableObject {
         reconcileLocalParticipation()
         GameLog.phaseChanged(from: previousPhase, to: .handSummary, state: state)
         GameLog.handSummaryOpened(state: state)
-        publishCurrentState()
     }
 
     private func resetReadyStateForHandSummary() {
@@ -931,7 +847,6 @@ final class GameStore: ObservableObject {
             state.heroHandRank = nil
             shouldRequestRejoinOnRemoteState = false
             pendingRejoinHandID = nil
-            publishCurrentState()
         case .playing, .showdown:
             pendingRejoinHandID = state.handID
             shouldRequestRejoinOnRemoteState = false
@@ -1200,15 +1115,6 @@ final class GameStore: ObservableObject {
             clearBoardRevealGate()
         }
 
-        if isHost, engine.correctShowdownReveals(&state) {
-            publishCurrentState()
-        }
-
-        if (state.phase == .playing || state.phase == .showdown),
-           state.heroHoleCards.isEmpty,
-           isHeroEligibleForHoleCards {
-            fetchHeroHoleCards()
-        }
         if state.phase == .showdown {
             scheduleBotShowIfNeeded()
             restartShowdownTimeout()
@@ -1217,11 +1123,6 @@ final class GameStore: ObservableObject {
             // Another device already moved the table on, so drop our own fallback.
             cancelShowdownAdvance()
         }
-        // Recover before the next street is dealt, so the rebuilt deck knows which cards
-        // are already in players' hands.
-        if isHost, (state.phase == .playing || state.phase == .showdown), state.holeCardsByPlayer.isEmpty {
-            restoreHostHoleCards()
-        }
     }
 
     private func resolveHostPendingState() {
@@ -1229,13 +1130,11 @@ final class GameStore: ObservableObject {
 
         if state.handResult?.wentToShowdown == true, state.phase == .playing {
             enterShowdown(fromRemotePoll: true)
-            publishCurrentState()
             return
         }
 
         if state.lastHandWinnerID != nil {
             finalizeHandIfNeeded(fromRemotePoll: true)
-            publishCurrentState()
             return
         }
 
@@ -1255,7 +1154,6 @@ final class GameStore: ObservableObject {
                 finalizeHandIfNeeded(fromRemotePoll: true)
             }
         }
-        publishCurrentState()
     }
 
     /// Watches for a table with nobody on the clock. A lost or overwritten publish used to
@@ -1278,9 +1176,6 @@ final class GameStore: ObservableObject {
             return
         }
         if state.phase == .showdown {
-            if isHost, state.holeCardsByPlayer.isEmpty {
-                restoreHostHoleCards()
-            }
             if state.pendingRevealPlayerID == nil,
                !(state.handResult?.reveals.isEmpty ?? true) {
                 stalledPollTicks = 0
@@ -1304,9 +1199,6 @@ final class GameStore: ObservableObject {
             stalledPollTicks = 0
             return
         }
-        if isHost, state.holeCardsByPlayer.isEmpty {
-            restoreHostHoleCards()
-        }
         guard state.activePlayerID == nil else {
             stalledPollTicks = 0
             return
@@ -1326,12 +1218,10 @@ final class GameStore: ObservableObject {
 
         if state.handResult?.wentToShowdown == true {
             enterShowdown(fromRemotePoll: true)
-            publishCurrentState()
             return
         }
         if state.lastHandWinnerID != nil {
             finalizeHandIfNeeded(fromRemotePoll: true)
-            publishCurrentState()
             return
         }
         let pending = GameLog.ActionSnapshot.capture(
@@ -1345,174 +1235,6 @@ final class GameStore: ObservableObject {
             enterShowdown(fromRemotePoll: true)
         } else if state.activePlayerID == nil {
             finalizeHandIfNeeded(fromRemotePoll: true)
-        }
-        publishCurrentState()
-    }
-
-    /// Re-reads every seat's hole cards so a host that lost them (extension relaunch) can
-    /// still deal the remaining streets and run the showdown.
-    private func restoreHostHoleCards() {
-        guard let supabaseSync = syncer as? SupabaseSync,
-              let handID = state.handID,
-              !isRestoringHostHoleCards else { return }
-        isRestoringHostHoleCards = true
-        let roomID = state.gameID.uuidString
-        Task { [weak self] in
-            guard let self else { return }
-            defer { self.isRestoringHostHoleCards = false }
-            guard let cards = try? await supabaseSync.fetchAllHoleCards(
-                roomID: roomID,
-                handID: handID
-            ),
-                  !cards.isEmpty else { return }
-            self.state.holeCardsByPlayer = cards
-            self.engine.updateHeroDisplay(&self.state)
-            if self.engine.correctShowdownReveals(&self.state) {
-                self.publishCurrentState()
-            }
-            GameLog.snapshot(self.state, event: "host hole cards restored")
-        }
-    }
-
-    private func startHoleCardRetryLoop() {
-        holeCardRetryTask?.cancel()
-        holeCardRetryTask = Task { [weak self] in
-            while !Task.isCancelled {
-                guard let self else { return }
-                if (self.state.phase == .playing || self.state.phase == .showdown)
-                    && self.state.heroHoleCards.isEmpty
-                    && self.isHeroEligibleForHoleCards {
-                    self.fetchHeroHoleCards()
-                }
-                try? await Task.sleep(for: .seconds(2))
-            }
-        }
-    }
-
-    /// Fetches the hero's hole cards from `player_hole_cards` and stores them locally.
-    /// Retried on every poll tick until the host has written them.
-    private func fetchHeroHoleCards() {
-        guard let heroID = state.heroID,
-              let handID = state.handID,
-              let supabaseSync = syncer as? SupabaseSync,
-              !isFetchingHoleCards else { return }
-        guard isHeroEligibleForHoleCards else {
-            state.heroHoleCards = []
-            state.heroHandRank = nil
-            return
-        }
-        isFetchingHoleCards = true
-        let roomID = state.gameID.uuidString
-        let expectedHandID = handID
-        Task { [weak self] in
-            guard let self else { return }
-            var shouldRefetch = false
-            defer {
-                self.isFetchingHoleCards = false
-                if shouldRefetch {
-                    self.fetchHeroHoleCards()
-                }
-            }
-            do {
-                if let cards = try await supabaseSync.fetchHoleCards(
-                    roomID: roomID,
-                    playerID: heroID,
-                    handID: expectedHandID
-                ) {
-                    if cards.isEmpty {
-                        GameLog.holeCardsFetchEmpty(playerID: heroID, state: self.state)
-                    } else if self.state.handID != expectedHandID {
-                        shouldRefetch = (self.state.phase == .playing || self.state.phase == .showdown)
-                            && self.state.heroHoleCards.isEmpty
-                            && self.isHeroEligibleForHoleCards
-                    } else {
-                        self.state.heroHoleCards = cards
-                        self.engine.updateHeroDisplay(&self.state)
-                        GameLog.holeCardsFetched(
-                            playerID: heroID,
-                            cardCount: cards.count,
-                            state: self.state
-                        )
-                    }
-                } else {
-                    GameLog.holeCardsFetchEmpty(playerID: heroID, state: self.state)
-                }
-            } catch {
-                GameLog.holeCardsFetchFailed(playerID: heroID, state: self.state)
-            }
-        }
-    }
-
-    private func writeHoleCardsToSupabase() async -> Bool {
-        guard let supabaseSync = syncer as? SupabaseSync,
-              let handID = state.handID else { return false }
-        let holeCards = state.holeCardsByPlayer
-        let roomID    = state.gameID.uuidString
-        var allStored = true
-
-        do {
-            try await supabaseSync.deleteAllHoleCards(roomID: roomID)
-        } catch {
-            GameLog.holeCardsStoreFailed(playerID: "room", state: state)
-            return false
-        }
-
-        for (playerID, cards) in holeCards {
-            var stored = false
-            for attempt in 1...3 {
-                do {
-                    try await supabaseSync.upsertHoleCards(
-                        roomID: roomID,
-                        playerID: playerID,
-                        handID: handID,
-                        cards: cards
-                    )
-                    GameLog.holeCardsStored(
-                        playerID: playerID,
-                        cardCount: cards.count,
-                        state: state
-                    )
-                    stored = true
-                    break
-                } catch {
-                    if attempt == 3 {
-                        GameLog.holeCardsStoreFailed(playerID: playerID, state: state)
-                    } else {
-                        try? await Task.sleep(for: .milliseconds(500))
-                    }
-                }
-            }
-            allStored = allStored && stored
-        }
-        return allStored
-    }
-
-    /// Merges the latest lobby roster from Supabase before the host deals a new hand.
-    private func refreshPlayersFromServer() async {
-        guard isHost, let heroID = state.heroID else { return }
-        guard let response = try? await GameCommandClient.shared.roomState(
-            roomID: state.gameID,
-            playerID: heroID
-        ), let remote = response.state else { return }
-        mergeJoinedPlayers(from: remote)
-    }
-
-    private func mergeJoinedPlayers(from remote: GameState) {
-        for remotePlayer in remote.players {
-            if let idx = state.players.firstIndex(where: { $0.id == remotePlayer.id }) {
-                state.players[idx].name = remotePlayer.name
-                state.players[idx].avatarIndex = remotePlayer.avatarIndex
-                if state.phase == .waiting || state.phase == .handSummary {
-                    state.players[idx].isReady = remotePlayer.isReady
-                }
-                state.players[idx].isEliminated = remotePlayer.isEliminated
-                state.players[idx].isSittingOut = remotePlayer.isSittingOut
-                if remotePlayer.stack > 0 || remotePlayer.isEliminated {
-                    state.players[idx].stack = remotePlayer.stack
-                }
-            } else {
-                state.players.append(remotePlayer)
-            }
         }
     }
 

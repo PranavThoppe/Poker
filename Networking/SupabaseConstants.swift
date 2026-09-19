@@ -4,5 +4,7 @@ import Foundation
 /// Replace placeholders after creating a project at https://supabase.com.
 enum SupabaseConstants {
     static let projectURL = "https://vyysmjvojjrwqjvobvfn.supabase.co"
-    static let anonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ5eXNtanZvampyd3Fqdm9idmZuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAxNTY1MjQsImV4cCI6MjA5NTczMjUyNH0.iySwAnmOPwEZoiKcCNCF_f6-z2J5ZG-sxZLiebeftzM"
+    /// Supabase's current public client key. The game Edge Function validates
+    /// `sb_publishable_…` keys; legacy JWT-shaped anon keys are rejected.
+    static let anonKey = "sb_publishable_saZNPJbREI6CIt_mv7t7Lg_W3-Y3db_"
 }

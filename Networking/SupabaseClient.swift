@@ -76,6 +76,59 @@ struct SupabaseClient {
         try validate(response)
     }
 
+    /// Calls an Edge Function with the project publishable key. Game state must
+    /// use this path; REST remains only for non-game features.
+    func function<T: Decodable>(_ name: String, body: some Encodable) async throws -> T {
+        guard let url = URL(string: SupabaseConstants.projectURL + "/functions/v1/" + name) else {
+            throw URLError(.badURL)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        applyHeaders(to: &request, contentType: true)
+        request.httpBody = try encoder.encode(body)
+        // A Function can take a moment to resume after being idle. Retrying only
+        // transport and temporary-server failures keeps the UI responsive without
+        // hiding authentication or validation errors. Game room creation and
+        // commands are idempotent on the server, so repeating this request is safe.
+        let (data, response) = try await performFunctionRequest(request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        guard (200..<300).contains(http.statusCode) else {
+            if let failure = try? decoder.decode(GameAPIErrorEnvelope.self, from: data) {
+                throw GameAPIClientError.server(status: http.statusCode, code: failure.error.code, message: failure.error.message)
+            }
+            throw GameAPIClientError.server(status: http.statusCode, code: "http_\(http.statusCode)", message: nil)
+        }
+        return try decoder.decode(T.self, from: data)
+    }
+
+    private func performFunctionRequest(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        let retryDelays: [Duration] = [.milliseconds(400), .seconds(1)]
+        for attempt in 0...retryDelays.count {
+            do {
+                let result = try await session.data(for: request)
+                if let response = result.1 as? HTTPURLResponse,
+                   shouldRetry(status: response.statusCode), attempt < retryDelays.count {
+                    try await Task.sleep(for: retryDelays[attempt])
+                    continue
+                }
+                return result
+            } catch let error as URLError where attempt < retryDelays.count && isTransient(error) {
+                try await Task.sleep(for: retryDelays[attempt])
+            }
+        }
+        // The loop either returned a response or the final request threw.
+        throw URLError(.cannotConnectToHost)
+    }
+
+    private func shouldRetry(status: Int) -> Bool {
+        status == 408 || status == 429 || (500...599).contains(status)
+    }
+
+    private func isTransient(_ error: URLError) -> Bool {
+        [.timedOut, .cannotConnectToHost, .networkConnectionLost, .notConnectedToInternet,
+         .dnsLookupFailed, .internationalRoamingOff].contains(error.code)
+    }
+
     // MARK: - Private helpers
 
     private func applyHeaders(to request: inout URLRequest, contentType: Bool = false) {

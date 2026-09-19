@@ -6,6 +6,11 @@ final class GameStore: ObservableObject {
     @Published var state: GameState
     @Published var showManualFinishTieWarning = false
     @Published var blindIncreaseConfirmation: String?
+    @Published private(set) var isSubmittingCommand = false
+    @Published private(set) var multiplayerError: String?
+    /// Retained verbatim after a transport failure so retrying cannot apply a
+    /// second wager if the first request reached the Function.
+    private var retryableClassicCommand: (command: GameCommand, actionID: UUID)?
 
     /// Sync backend; replaced with `SupabaseSync()` for classic multiplayer sessions.
     var syncer: GameSyncing = MockSync()
@@ -115,9 +120,24 @@ final class GameStore: ObservableObject {
         }
     }
 
+    /// Room entry APIs are deliberately separate from local `joinGame`, which
+    /// remains useful for practice mode and previews.
+    func createClassicRoom(playerID: String, name: String, avatarIndex: Int) async throws {
+        let response = try await GameCommandClient.shared.createRoom(roomID: state.gameID, playerID: playerID, name: name, avatarIndex: avatarIndex)
+        guard let remote = response.state else { throw URLError(.badServerResponse) }
+        state = remote; state.stateVersion = response.serverVersion ?? remote.stateVersion; state.heroID = playerID
+    }
+
+    func joinClassicRoom(playerID: String, name: String, avatarIndex: Int) async throws {
+        let response = try await GameCommandClient.shared.joinRoom(roomID: state.gameID, playerID: playerID, name: name, avatarIndex: avatarIndex)
+        guard let remote = response.state else { throw URLError(.badServerResponse) }
+        state = remote; state.stateVersion = response.serverVersion ?? remote.stateVersion; state.heroID = playerID
+    }
+
     // MARK: - Ready state
 
     func toggleReady() {
+        if state.gameMode == .classicPoker { submit(.setReady(!(state.players.first { $0.id == state.heroID }?.isReady ?? false))); return }
         guard let heroID = state.heroID,
               let idx = state.players.firstIndex(where: { $0.id == heroID }) else { return }
         guard !state.players[idx].isSittingOut else { return }
@@ -134,6 +154,7 @@ final class GameStore: ObservableObject {
     }
 
     func startGame() {
+        if state.gameMode == .classicPoker { submit(.startGame); return }
         guard !state.players.isEmpty else { return }
         guard state.gameMode != .classicPoker || isHost else { return }
         let previousPhase = state.phase
@@ -217,6 +238,7 @@ final class GameStore: ObservableObject {
 
     /// Blind levels only change between hands and preserve each player's ready status.
     func raiseSmallBlind(to newSmallBlind: Int) {
+        if state.gameMode == .classicPoker { submit(.raiseBlinds(newSmallBlind)); return }
         guard canRaiseBlinds, newSmallBlind > tableSmallBlind else { return }
 
         state.smallBlind = newSmallBlind
@@ -242,6 +264,7 @@ final class GameStore: ObservableObject {
     /// The X action for an unfinished Classic room. This is intentionally available only to
     /// an active, non-eliminated local player; elimination remains permanent.
     func sitOutLocalPlayer() {
+        if state.gameMode == .classicPoker { submit(.setSittingOut(true)); return }
         guard state.gameMode == .classicPoker,
               let heroID = state.heroID,
               let index = state.players.firstIndex(where: { $0.id == heroID }),
@@ -362,6 +385,7 @@ final class GameStore: ObservableObject {
     }
 
     func showCards(for playerID: String? = nil, auto: Bool = false) {
+        if state.gameMode == .classicPoker { submit(.showCards); return }
         guard state.phase == .showdown else { return }
         guard let id = playerID ?? state.heroID else { return }
         if state.players.first(where: { $0.id == id })?.isSittingOut == true, !auto { return }
@@ -400,6 +424,7 @@ final class GameStore: ObservableObject {
     /// by hand; `auto` is the countdown fallback, a bot-won pot, or the host covering an absent
     /// winner. Practice always lets the human advance so they pace the table themselves.
     func advanceToHandSummary(auto: Bool = false) {
+        if state.gameMode == .classicPoker { submit(.advanceSummary); return }
         guard state.phase == .showdown, showdownDeciderID != nil else { return }
         let practiceHeroMayAdvance = state.gameMode == .practiceVsCPU && state.heroID != nil
         guard auto || isHeroShowdownDecider || practiceHeroMayAdvance else { return }
@@ -410,6 +435,7 @@ final class GameStore: ObservableObject {
     // MARK: - End game / navigation
 
     func requestManualEndGame() {
+        if state.gameMode == .classicPoker { submit(.endGame(.manualFinish)); return }
         guard state.phase == .handSummary else { return }
         if isChipTiedAmongActiveHumans() {
             if state.manualFinishTieAttempts == 0 {
@@ -429,6 +455,7 @@ final class GameStore: ObservableObject {
     }
 
     func endGame(reason: GameEndReason = .manualFinish) {
+        if state.gameMode == .classicPoker { submit(.endGame(reason)); return }
         clearBoardRevealGate()
         let previousPhase = state.phase
         state.phase = .ended
@@ -450,6 +477,7 @@ final class GameStore: ObservableObject {
     }
 
     func continueAfterHandSummary() {
+        if state.gameMode == .classicPoker { submit(.startNextHand); return }
         guard state.phase == .handSummary else { return }
         if state.gameMode == .classicPoker {
             guard isHost else {
@@ -491,6 +519,7 @@ final class GameStore: ObservableObject {
     }
 
     func resetToWaiting() {
+        if state.gameMode == .classicPoker { submit(.resetRoom); return }
         botScheduler.cancel()
         showdownTimeoutTask?.cancel()
         cancelShowdownAdvance()
@@ -583,8 +612,80 @@ final class GameStore: ObservableObject {
     // MARK: - Private
 
     private func apply(_ action: BettingAction) {
+        if state.gameMode == .classicPoker {
+            switch action {
+            case .fold: submit(.bet(kind: "fold", amount: nil))
+            case .check: submit(.bet(kind: "check", amount: nil))
+            // The server verifies the exact call amount, which prevents a
+            // stale client from silently paying too little or too much.
+            case .call: submit(.bet(kind: "call", amount: state.callAmount))
+            case .raise(let amount): submit(.bet(kind: "raise", amount: amount))
+            }
+            return
+        }
         guard let heroID = state.heroID else { return }
         applyAction(for: heroID, action: action)
+    }
+
+    /// Merges only a server response. The local Swift engine remains exclusive
+    /// to practice mode; an action ID is retained by callers for retry safety.
+    private func submit(_ command: GameCommand, actionID: UUID = UUID()) {
+        guard state.gameMode == .classicPoker, let heroID = state.heroID, !isSubmittingCommand else { return }
+        isSubmittingCommand = true; multiplayerError = nil
+        let roomID = state.gameID, version = state.version, handID = state.handID
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let result = try await GameCommandClient.shared.submit(roomID: roomID, playerID: heroID, version: version, handID: handID, command: command, actionID: actionID)
+                if let next = result.state {
+                    self.mergeServerState(next, serverVersion: result.serverVersion)
+                }
+                if self.retryableClassicCommand?.actionID == actionID {
+                    self.retryableClassicCommand = nil
+                }
+            } catch {
+                if Self.isStaleCommandError(error) {
+                    // A response from an earlier poll or another player's action won
+                    // the race. Refresh before accepting the next tap; retrying this
+                    // command would apply it to a different decision.
+                    await self.refreshClassicState(roomID: roomID, playerID: heroID)
+                } else {
+                    self.retryableClassicCommand = (command, actionID)
+                    self.multiplayerError = error.localizedDescription
+                }
+            }
+            self.isSubmittingCommand = false
+        }
+    }
+
+    private static func isStaleCommandError(_ error: Error) -> Bool {
+        guard let apiError = error as? GameAPIClientError,
+              case let .server(_, code, _) = apiError else { return false }
+        return code == "stale_state" || code == "stale_hand"
+    }
+
+    /// Retrieves a fresh viewer-scoped snapshot after the server rejects a
+    /// command composed from an obsolete turn.
+    private func refreshClassicState(roomID: UUID, playerID: String) async {
+        guard let response = try? await GameCommandClient.shared.roomState(
+            roomID: roomID,
+            playerID: playerID
+        ), let remote = response.state else { return }
+        mergeServerState(remote, serverVersion: response.serverVersion)
+    }
+
+    private func mergeServerState(_ remote: GameState, serverVersion: Int?) {
+        var versionedRemote = remote
+        versionedRemote.stateVersion = serverVersion ?? remote.stateVersion
+        mergeRemoteState(versionedRemote, remoteHostID: versionedRemote.hostID)
+    }
+
+    /// Retries the exact request identity after a transient failure. A stale
+    /// response remains a refresh-required error; a dropped accepted response
+    /// is returned by the server's idempotency receipt.
+    func retryLastClassicCommand() {
+        guard let pending = retryableClassicCommand else { return }
+        submit(pending.command, actionID: pending.actionID)
     }
 
     private func applyAction(for playerID: String, action: BettingAction) {
@@ -1025,6 +1126,10 @@ final class GameStore: ObservableObject {
     /// Public fields including `handResult` come from remote (version-wins).
     private func mergeRemoteState(_ remote: GameState, remoteHostID: String?) {
         var remote = remote
+        // A command response can land while an older room-state request is
+        // still in flight. Never let that older snapshot resurrect a previous
+        // turn or its call amount.
+        guard remote.version >= state.version else { return }
         if remote.hostID == nil {
             remote.hostID = remoteHostID
         }
@@ -1384,9 +1489,11 @@ final class GameStore: ObservableObject {
 
     /// Merges the latest lobby roster from Supabase before the host deals a new hand.
     private func refreshPlayersFromServer() async {
-        guard isHost, let supabaseSync = syncer as? SupabaseSync else { return }
-        let roomID = state.gameID.uuidString
-        guard let (remote, _) = try? await supabaseSync.fetchGameRoom(roomID: roomID) else { return }
+        guard isHost, let heroID = state.heroID else { return }
+        guard let response = try? await GameCommandClient.shared.roomState(
+            roomID: state.gameID,
+            playerID: heroID
+        ), let remote = response.state else { return }
         mergeJoinedPlayers(from: remote)
     }
 

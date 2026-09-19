@@ -28,9 +28,9 @@ The client code and checked-in SQL identify these six active tables:
 | Table | Status | Why it exists | What breaks if removed |
 | --- | --- | --- | --- |
 | `profiles` | Essential | Stores the device profile: `id`, `display_name`, `avatar_index`, `lifetime_wins`, and `lifetime_hands_played`. It is created/updated during onboarding. | Onboarding sync fails; lifetime-stat sync and credit foreign keys fail. |
-| `game_rooms` | Essential | The current multiplayer-room snapshot: host, game mode, phase, public game state, update time, and version. | Multiplayer join, polling, and state synchronization stop working. |
-| `player_hole_cards` | Essential for multiplayer | Stores each player's private cards separately from the public room state, scoped by `room_id`, `player_id`, and `hand_id`. | Players cannot reliably receive/recover their hole cards; private cards would have to be moved into public state, which is unsafe. |
-| `game_intents` | Essential for host-authoritative multiplayer | A queue for player actions (`ready`, bets, folds, reset, etc.) which the host claims and resolves. | Guests cannot submit gameplay actions for the host to process. |
+| `game_rooms` | Essential | The server-authoritative room snapshot. `public_state` is viewer-safe; `private_state`, `deadline_at`, `server_version`, bounded command receipts, and bounded security telemetry are Function-only fields. `host_id` is immutable creator metadata only. | Multiplayer join, Function state reads, and state transitions stop working. |
+| `player_hole_cards` | Legacy during rollout | Old per-player-card store. New rooms retain all cards inside Function-only `game_rooms.private_state`. Client roles have no privileges on this table. | Only pre-cutover clients/rooms depend on it. |
+| `game_intents` | Legacy during rollout | The old host-claimed queue. Synchronous Edge Function commands supersede it. | Only pre-cutover clients/rooms depend on it. |
 | `game_win_credits` | Supporting / optional feature | Idempotency ledger for lifetime-win counting: one row per `(game_id, player_id)`. | The lifetime-wins display can double-count on retries unless this feature and its RPC are removed or redesigned. Core poker gameplay still works. |
 | `hand_played_credits` | Supporting profile-stat feature | Idempotency ledger for lifetime hands played: one row per `(hand_id, player_id)`, including `game_mode`. | The lifetime-hands count can double-count on retries unless this feature and its RPC are removed or redesigned. Core poker gameplay still works. |
 
@@ -45,10 +45,13 @@ feature deliberately as a small unit: the table, `credit_game_win` RPC,
 The important cleanup is likely **not** consolidation. These tables have
 different privacy, lifecycle, and access patterns:
 
-- `game_rooms` contains only public state and is overwritten throughout a game.
-- `player_hole_cards` contains secret state and is deleted before each new deal.
-- `game_intents` is a short-lived work queue; its resolved history should be
-  pruned on a schedule.
+- `game_rooms.public_state` is the only state returned to clients; `private_state`
+  contains the deck and all hole cards and is readable only by the Edge Function.
+- `recent_command_receipts` (100) supplies idempotency and `recent_security_events`
+  (100) / `security_summary` provide redacted abuse diagnostics. Prune security
+  events after 30 days with the scheduled cleanup job.
+- `player_hole_cards` and `game_intents` are retained only for rollback during
+  the first server-authoritative release; mobile access is revoked.
 - `game_win_credits` is a durable audit/idempotency ledger and should be kept
   while lifetime wins are supported.
 

@@ -10,11 +10,14 @@ protocol GameSyncing: AnyObject {
         onUpdate: @escaping @MainActor (GameState, String?) -> Void
     )
 
-    /// Publish a local state change to all other participants.
-    func publish(state: GameState, roomID: String)
-
     /// Tear down the subscription.
     func unsubscribe(roomID: String)
+}
+
+/// Transitional compatibility for practice/legacy UI paths. Classic Poker no
+/// longer implements this writer; mutations use `GameCommandClient` instead.
+extension GameSyncing {
+    func publish(state: GameState, roomID: String) {}
 }
 
 // MARK: - Message URL (iMessage bubble)
@@ -85,6 +88,5 @@ final class MockSync: GameSyncing {
         roomID: String,
         onUpdate: @escaping @MainActor (GameState, String?) -> Void
     ) {}
-    func publish(state: GameState, roomID: String) {}
     func unsubscribe(roomID: String) {}
 }

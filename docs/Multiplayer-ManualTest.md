@@ -38,3 +38,11 @@ Run a Debug build on two devices or simulators with different device IDs. Use De
 | 1 | Background one device during a hand, then return. | It re-syncs and retains only its own hole cards. |
 | 2 | Close and reopen a bubble mid-hand. | The host can restore its cards and complete the hand; the guest re-fetches its own cards. |
 | 3 | Leave a table briefly with no active player. | The host resolves or recovers the stalled hand without losing the pot. |
+# Server-authoritative checks
+
+Before the existing visual checklist, verify the following against a staging
+project: creator background/force-quit does not prevent a seated player from
+submitting a legal command; retrying one exact action ID returns the same
+receipt; a stale version refreshes without changing chips; a non-member and a
+request for another player's cards are denied; and direct PostgREST reads or
+writes of `game_rooms`/`player_hole_cards` fail with the publishable key.

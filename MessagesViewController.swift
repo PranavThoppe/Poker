@@ -142,15 +142,21 @@ class MessagesViewController: MSMessagesAppViewController {
         extensionHost.gameStore.state = gameState
         extensionHost.gameStore.syncer = SupabaseSync()
         extensionHost.gameStore.isHost = false
-        extensionHost.gameStore.joinGame(
-            playerID: ProfileService.deviceID,
-            name: Self.localPlayerName(for: conversation),
-            avatarIndex: ProfileService.shared.profile?.avatarIndex ?? 0
-        )
-        extensionHost.gameStore.subscribeToRoom()
-        extensionHost.gameStore.requestRejoinAfterReopening()
-        extensionHost.route = .game
-        requestPresentationStyle(.expanded)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await self.extensionHost.gameStore.joinClassicRoom(
+                    playerID: ProfileService.deviceID, name: Self.localPlayerName(for: conversation),
+                    avatarIndex: ProfileService.shared.profile?.avatarIndex ?? 0
+                )
+                self.extensionHost.gameStore.subscribeToRoom()
+                self.extensionHost.route = .game
+                self.requestPresentationStyle(.expanded)
+            } catch {
+                self.extensionHost.route = .gameSelection
+                self.presentGameConnectionError(error)
+            }
+        }
     }
 
     private static func localPlayerName(for conversation: MSConversation?) -> String {
@@ -197,14 +203,32 @@ class MessagesViewController: MSMessagesAppViewController {
         store.stopMultiplayerSession()
         store.state = GameStore.createNew(mode: .classicPoker)
         store.syncer = SupabaseSync()
-        store.isHost = true
-        store.joinGame(
-            playerID: ProfileService.deviceID,
-            name: Self.localPlayerName(for: conversation),
-            avatarIndex: ProfileService.shared.profile?.avatarIndex ?? 0
-        )
-        store.subscribeToRoom()
+        store.isHost = false
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await store.createClassicRoom(playerID: ProfileService.deviceID, name: Self.localPlayerName(for: conversation), avatarIndex: ProfileService.shared.profile?.avatarIndex ?? 0)
+                store.subscribeToRoom()
+                self.insertGameMessage(into: conversation, store: store)
+            } catch {
+                NSLog("Unable to create poker room: %@", error.localizedDescription)
+                self.presentGameConnectionError(error)
+            }
+        }
+    }
 
+    private func presentGameConnectionError(_ error: Error) {
+        let detail = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        let alert = UIAlertController(
+            title: "Couldn’t start Classic Poker",
+            message: "Please try again in a moment.\n\n\(detail)",
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: "OK", style: .default))
+        present(alert, animated: true)
+    }
+
+    private func insertGameMessage(into conversation: MSConversation, store: GameStore) {
         let message = MSMessage()
         let layout = MSMessageTemplateLayout()
         layout.caption = nil

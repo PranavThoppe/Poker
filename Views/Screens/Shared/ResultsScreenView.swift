@@ -28,6 +28,7 @@ struct ResultsScreenView: View {
     let statsSectionTitle: String
     let buttonTitle: String
     let onButton: () -> Void
+    var pulsesPrimaryAction: Bool = false
     var buttonDetail: String? = nil
     var secondaryButtonTitle: String? = nil
     var onSecondaryButton: (() -> Void)? = nil
@@ -43,6 +44,7 @@ struct ResultsScreenView: View {
     var gameSettingsConfirmation: String? = nil
 
     @State private var isBlindConfirmationPulseComplete = false
+    @State private var primaryActionPulse = 0
 
     var body: some View {
         ZStack {
@@ -224,7 +226,12 @@ struct ResultsScreenView: View {
     }
 
     private func countdownActionButton(progress: Double?) -> some View {
-        Button(action: onButton) {
+        Button(action: {
+            if pulsesPrimaryAction {
+                primaryActionPulse += 1
+            }
+            onButton()
+        }) {
             ZStack {
                 if let progress {
                     CountdownCapsuleFill(
@@ -252,6 +259,7 @@ struct ResultsScreenView: View {
             .frame(height: Theme.Size.actionPillH)
             .clipShape(Capsule())
         }
+        .tapGlowRipple(trigger: primaryActionPulse, color: buttonFillColor)
     }
 
     private func sideActionButton(title: String, action: @escaping () -> Void) -> some View {

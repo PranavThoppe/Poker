@@ -46,6 +46,9 @@ final class GameStore: ObservableObject {
     static let showdownAdvanceSeconds: TimeInterval = 10
     /// Safety net if the board view never reports that a flip finished.
     private static let boardRevealFallbackSeconds: TimeInterval = 2.5
+    /// Gives tap feedback and chip-count animations time to finish before a CPU response.
+    private static let botTurnDelay: TimeInterval = 0.6
+    private static let botTurnDelayAfterBoardDeal: TimeInterval = 0.55
 
     init(state: GameState = GameState()) {
         self.state = state
@@ -874,7 +877,7 @@ final class GameStore: ObservableObject {
             return
         }
         // After a deal, give a short beat once the flip has already finished.
-        let delay: TimeInterval = afterBoardDeal ? 0.55 : 0.4
+        let delay = afterBoardDeal ? Self.botTurnDelayAfterBoardDeal : Self.botTurnDelay
         botScheduler.schedule(delay: delay) { [weak self] in
             self?.performBotTurn(playerID: id)
         }

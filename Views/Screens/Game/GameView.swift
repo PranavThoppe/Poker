@@ -337,6 +337,8 @@ struct ActionBarView: View {
     @State private var showRaiseCustomization = false
     /// `nil` means use the engine's current min-raise; set only while customizing this decision.
     @State private var raiseOverride: Int?
+    @State private var checkCallPulse = 0
+    @State private var raisePulse = 0
 
     private var actionsEnabled: Bool { isHeroTurn }
     private var raiseEnabled: Bool { actionsEnabled && canRaise }
@@ -366,18 +368,28 @@ struct ActionBarView: View {
             }
 
             HStack(spacing: Theme.Spacing.sm) {
-                if callAmount == 0 {
-                    ActionPill(label: "Check", action: onCheck, isEnabled: actionsEnabled)
-                } else {
-                    ActionPill(label: "Call \(callAmount)", action: onCall, isEnabled: actionsEnabled)
-                }
+                ActionPill(
+                    label: callAmount == 0 ? "Check" : "Call \(callAmount)",
+                    action: {
+                        checkCallPulse += 1
+                        if callAmount == 0 {
+                            onCheck()
+                        } else {
+                            onCall()
+                        }
+                    },
+                    isEnabled: actionsEnabled,
+                    pulseTrigger: checkCallPulse
+                )
                 if canRaise {
                     RaiseSplitButton(
                         amount: selectedAmount,
                         maximumAmount: maximumRaiseAmount,
                         isEnabled: raiseEnabled,
+                        pulseTrigger: raisePulse,
                         onRaise: {
                             let amount = selectedAmount
+                            raisePulse += 1
                             showRaiseCustomization = false
                             raiseOverride = nil
                             onRaise(amount)
@@ -427,6 +439,7 @@ private struct RaiseSplitButton: View {
     let amount: Int
     let maximumAmount: Int
     let isEnabled: Bool
+    let pulseTrigger: Int
     let onRaise: () -> Void
     let onCustomize: () -> Void
 
@@ -459,6 +472,7 @@ private struct RaiseSplitButton: View {
         }
         .background(Theme.Color.surface)
         .clipShape(Capsule())
+        .tapGlowRipple(trigger: pulseTrigger, color: Theme.Color.primary)
         .disabled(!isEnabled)
         .opacity(isEnabled ? 1 : 0.4)
     }
@@ -536,6 +550,7 @@ private struct ActionPill: View {
     let label: String
     let action: () -> Void
     var isEnabled: Bool = true
+    let pulseTrigger: Int
 
     var body: some View {
         Button(action: action) {
@@ -547,6 +562,7 @@ private struct ActionPill: View {
                 .background(Theme.Color.surface)
                 .clipShape(Capsule())
         }
+        .tapGlowRipple(trigger: pulseTrigger, color: Theme.Color.primary)
         .disabled(!isEnabled)
         .opacity(isEnabled ? 1 : 0.4)
     }

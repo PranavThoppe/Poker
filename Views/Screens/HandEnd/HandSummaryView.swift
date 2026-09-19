@@ -93,6 +93,7 @@ struct HandSummaryView: View {
             statsSectionTitle: "Leaderboard",
             buttonTitle: buttonTitle,
             onButton: primaryAction,
+            pulsesPrimaryAction: requiresReadyUp,
             buttonDetail: readyCountDetail,
             secondaryButtonTitle: canStartNextHand ? "Next Hand" : nil,
             onSecondaryButton: { continueIfNeeded() },

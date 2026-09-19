@@ -2,6 +2,7 @@ import SwiftUI
 
 struct WaitingRoomView: View {
     @EnvironmentObject var store: GameStore
+    @State private var readyPulse = 0
 
     private var players: [Player] { store.state.players }
     private var heroID: String? { store.state.heroID }
@@ -80,7 +81,10 @@ struct WaitingRoomView: View {
     }
 
     private var readyButton: some View {
-        Button(action: { store.toggleReady() }) {
+        Button(action: {
+            readyPulse += 1
+            store.toggleReady()
+        }) {
             Text(isHeroReady ? "Cancel" : "Ready Up")
                 .font(Theme.Font.actionLabel)
                 .foregroundStyle(isHeroReady ? Theme.Color.secondary : Theme.Color.background)
@@ -89,6 +93,7 @@ struct WaitingRoomView: View {
                 .background(isHeroReady ? Theme.Color.surface : Theme.Color.primary)
                 .clipShape(Capsule())
         }
+        .tapGlowRipple(trigger: readyPulse, color: Theme.Color.green)
         .animation(.easeInOut(duration: 0.2), value: isHeroReady)
     }
 

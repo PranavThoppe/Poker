@@ -53,6 +53,8 @@ struct GameView: View {
                     raiseIncrement: store.tableSmallBlind,
                     canRaise: canRaise,
                     isHeroTurn: store.isHeroTurn && !isBoardRevealing && !store.isBoardRevealPending,
+                    demoCheckCallPulse: store.marketingDemoCheckCallPulse,
+                    demoRaisePulse: store.marketingDemoRaisePulse,
                     onCheck: { store.check() },
                     onCall: { store.call() },
                     onRaise: { store.raise($0) },
@@ -328,6 +330,8 @@ struct ActionBarView: View {
     let raiseIncrement: Int
     let canRaise: Bool
     let isHeroTurn: Bool
+    var demoCheckCallPulse: Int = 0
+    var demoRaisePulse: Int = 0
     let onCheck: () -> Void
     let onCall: () -> Void
     let onRaise: (Int) -> Void
@@ -378,14 +382,14 @@ struct ActionBarView: View {
                         }
                     },
                     isEnabled: actionsEnabled,
-                    pulseTrigger: checkCallPulse
+                    pulseTrigger: checkCallPulse + demoCheckCallPulse
                 )
                 if canRaise {
                     RaiseSplitButton(
                         amount: selectedAmount,
                         maximumAmount: maximumRaiseAmount,
                         isEnabled: raiseEnabled,
-                        pulseTrigger: raisePulse,
+                        pulseTrigger: raisePulse + demoRaisePulse,
                         onRaise: {
                             let amount = selectedAmount
                             raisePulse += 1

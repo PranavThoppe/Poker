@@ -39,6 +39,14 @@ final class GameStore: ObservableObject {
     /// True while newly dealt board cards are still flipping face-up. Bots and showdown wait;
     /// the hero hand-rank label stays on the pre-deal value so it does not spoil the flip.
     @Published private(set) var isBoardRevealPending = false
+    /// Demo-only pulse counters so autoplay can reuse the same button ripples as a real tap.
+    @Published private(set) var marketingDemoCheckCallPulse = 0
+    @Published private(set) var marketingDemoRaisePulse = 0
+    @Published private(set) var marketingDemoReadyPulse = 0
+    #if DEBUG
+    /// Marketing Demo is a local practice session whose hero uses the same legal-action path as bots.
+    private var marketingDemoAutoplay = false
+    #endif
     private var heldHeroHandRank: HandRank?
     private var deferredShowdownBefore: GameLog.ActionSnapshot?
     private var deferredShowdownFromRemote = false
@@ -184,7 +192,13 @@ final class GameStore: ObservableObject {
         guard !state.players.isEmpty else { return }
         let previousPhase = state.phase
         if state.gameMode == .practiceVsCPU {
+            #if DEBUG
+            if !marketingDemoAutoplay {
+                seedBots()
+            }
+            #else
             seedBots()
+            #endif
             engine.startGame(&state)
             engine.startHand(&state)
             if previousPhase == .waiting {
@@ -197,6 +211,31 @@ final class GameStore: ObservableObject {
             return
         }
 
+    }
+
+    #if DEBUG
+    /// Enables hands-free play for the local player in the internal Marketing Demo only.
+    func enableMarketingDemoAutoplay() {
+        marketingDemoAutoplay = true
+    }
+
+    func markMarketingDemoPlayerReady(id: String) {
+        guard marketingDemoAutoplay,
+              let index = state.players.firstIndex(where: { $0.id == id }) else { return }
+        state.players[index].isReady = true
+        GameLog.readyChanged(playerID: id, isReady: true, state: state)
+        if id == state.heroID {
+            marketingDemoReadyPulse += 1
+        }
+    }
+    #endif
+
+    var isMarketingDemoAutoplay: Bool {
+        #if DEBUG
+        marketingDemoAutoplay
+        #else
+        false
+        #endif
     }
 
     var allReady: Bool {
@@ -801,6 +840,16 @@ final class GameStore: ObservableObject {
     /// delay; a human winner has no visible countdown — only the host runs a silent safety
     /// timeout in case that winner has dropped.
     private func scheduleShowdownAdvanceIfNeeded() {
+        #if DEBUG
+        if marketingDemoAutoplay, let deciderID = showdownDeciderID {
+            // Leave the completed reveal on screen long enough to read the winning hand.
+            botScheduler.schedule(delay: 2) { [weak self] in
+                guard self?.showdownDeciderID == deciderID else { return }
+                self?.advanceToHandSummary(auto: true)
+            }
+            return
+        }
+        #endif
         guard state.gameMode != .practiceVsCPU else { return }
         guard let deciderID = showdownDeciderID else { return }
 
@@ -925,14 +974,27 @@ final class GameStore: ObservableObject {
     private func scheduleBotTurnIfNeeded(afterBoardDeal: Bool = false) {
         guard state.gameMode == .practiceVsCPU,
               let id = state.activePlayerID,
-              isBot(id) else { return }
+              isAutomatedPlayer(id) else { return }
         // New board cards are still flipping — resume from boardRevealFinished instead.
         guard !isBoardRevealPending else {
             botScheduler.cancel()
             return
         }
         // After a deal, give a short beat once the flip has already finished.
+        #if DEBUG
+        let delay: TimeInterval
+        if marketingDemoAutoplay,
+           let action = marketingDemoAction(for: id, legalActions: engine.legalActions(for: state, playerID: id)),
+           isQuickDemoAction(action) {
+            delay = 0.5
+        } else if marketingDemoAutoplay {
+            delay = Double.random(in: 1.2...3.0)
+        } else {
+            delay = afterBoardDeal ? Self.botTurnDelayAfterBoardDeal : Self.botTurnDelay
+        }
+        #else
         let delay = afterBoardDeal ? Self.botTurnDelayAfterBoardDeal : Self.botTurnDelay
+        #endif
         botScheduler.schedule(delay: delay) { [weak self] in
             self?.performBotTurn(playerID: id)
         }
@@ -998,8 +1060,15 @@ final class GameStore: ObservableObject {
     private func scheduleBotShowIfNeeded() {
         guard state.phase == .showdown,
               let id = state.pendingRevealPlayerID,
-              isBot(id) else { return }
-        botScheduler.schedule { [weak self] in
+              isAutomatedPlayer(id) else { return }
+        #if DEBUG
+        // The Show control has an eight-second fill. Hold the demo hero for four seconds so
+        // the recording captures a deliberate half-filled reveal instead of an instant flip.
+        let delay: TimeInterval = marketingDemoAutoplay && id == state.heroID ? 4 : 0.4
+        #else
+        let delay: TimeInterval = 0.4
+        #endif
+        botScheduler.schedule(delay: delay) { [weak self] in
             self?.showCards(for: id)
         }
     }
@@ -1029,14 +1098,40 @@ final class GameStore: ObservableObject {
         guard state.phase == .playing,
               !isBoardRevealPending,
               state.activePlayerID == playerID,
-              isBot(playerID) else { return }
+              isAutomatedPlayer(playerID) else { return }
         let legal = engine.legalActions(for: state, playerID: playerID)
         guard !legal.isEmpty else { return }
-        let action = botStrategy.chooseAction(
+        let action: BettingAction
+        #if DEBUG
+        if marketingDemoAutoplay {
+            guard let demoAction = marketingDemoAction(for: playerID, legalActions: legal) else { return }
+            action = demoAction
+        } else {
+            action = botStrategy.chooseAction(
+                state: state,
+                playerID: playerID,
+                legalActions: legal
+            )
+        }
+        #else
+        action = botStrategy.chooseAction(
             state: state,
             playerID: playerID,
             legalActions: legal
         )
+        #endif
+        #if DEBUG
+        if marketingDemoAutoplay, playerID == state.heroID {
+            noteMarketingDemoHeroPulse(action)
+            botScheduler.schedule(delay: 0.42) { [weak self] in
+                guard let self else { return }
+                guard self.state.phase == .playing,
+                      self.state.activePlayerID == playerID else { return }
+                self.applyAction(for: playerID, action: action)
+            }
+            return
+        }
+        #endif
         applyAction(for: playerID, action: action)
     }
 
@@ -1052,6 +1147,63 @@ final class GameStore: ObservableObject {
     private func isBot(_ playerID: String) -> Bool {
         state.players.first(where: { $0.id == playerID })?.isBot == true
     }
+
+    private func isAutomatedPlayer(_ playerID: String) -> Bool {
+        if isBot(playerID) { return true }
+        #if DEBUG
+        return marketingDemoAutoplay && playerID == state.heroID
+        #else
+        return false
+        #endif
+    }
+
+    #if DEBUG
+    private func isQuickDemoAction(_ action: BettingAction) -> Bool {
+        switch action {
+        case .check, .call:
+            return true
+        case .fold, .raise:
+            return false
+        }
+    }
+
+    /// Keeps everyone in the demo hand, with one readable opening raise on both turn and river.
+    private func marketingDemoAction(for playerID: String, legalActions: [BettingAction]) -> BettingAction? {
+        guard state.activePlayerID == playerID else { return nil }
+
+        let isOpeningTurnOrRiverBet = (state.bettingRound == .turn || state.bettingRound == .river)
+            && state.streetBetLevel == 0
+        if isOpeningTurnOrRiverBet,
+           let raise = legalActions.first(where: {
+               if case .raise = $0 { return true }
+               return false
+           }) {
+            return raise
+        }
+
+        return legalActions.first(where: {
+            if case .check = $0 { return true }
+            return false
+        }) ?? legalActions.first(where: {
+            if case .call = $0 { return true }
+            return false
+        }) ?? legalActions.first(where: {
+            if case .raise = $0 { return true }
+            return false
+        })
+    }
+
+    private func noteMarketingDemoHeroPulse(_ action: BettingAction) {
+        switch action {
+        case .check, .call:
+            marketingDemoCheckCallPulse += 1
+        case .raise:
+            marketingDemoRaisePulse += 1
+        case .fold:
+            break
+        }
+    }
+    #endif
 
     private func presentBlindIncreaseConfirmation(smallBlind: Int) {
         blindIncreaseConfirmation = "Blinds increased: \(smallBlind) / \(smallBlind * 2)"

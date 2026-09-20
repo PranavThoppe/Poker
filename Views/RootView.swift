@@ -46,6 +46,7 @@ struct RootView: View {
             }
             .animation(.easeInOut(duration: 0.3), value: store.state.phase)
         }
+        .allowsHitTesting(!store.isMarketingDemoAutoplay)
         .overlay(alignment: .topTrailing) {
             if canExit {
                 Button {

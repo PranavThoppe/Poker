@@ -260,7 +260,7 @@ struct WaitingRoomView: View {
                 .background(isHeroReady ? Theme.Color.surface : Theme.Color.primary)
                 .clipShape(Capsule())
         }
-        .tapGlowRipple(trigger: readyPulse, color: Theme.Color.green)
+        .tapGlowRipple(trigger: readyPulse + store.marketingDemoReadyPulse, color: Theme.Color.green)
         .animation(.easeInOut(duration: 0.2), value: isHeroReady)
     }
 

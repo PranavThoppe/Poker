@@ -7,8 +7,6 @@ struct EndGameView: View {
     private var stats: [PlayerStats] { store.state.endStats }
     private var winner: PlayerStats? { stats.first { $0.isWinner } }
     private var hasWinner: Bool { stats.contains(where: \.isWinner) }
-    private var isPractice: Bool { store.state.gameMode == .practiceVsCPU }
-
     var body: some View {
         ResultsScreenView(
             stats: stats,
@@ -28,8 +26,8 @@ struct EndGameView: View {
                     store.resetToWaiting()
                 }
             },
-            secondaryButtonTitle: isPractice && onDone != nil ? "Play Again" : nil,
-            onSecondaryButton: isPractice && onDone != nil ? { store.resetToWaiting() } : nil
+            secondaryButtonTitle: onDone != nil && !store.isHeroSittingOut ? "Play Again" : nil,
+            onSecondaryButton: onDone != nil && !store.isHeroSittingOut ? { store.resetToWaiting() } : nil
         )
     }
 }

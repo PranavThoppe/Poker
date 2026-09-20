@@ -79,3 +79,62 @@ Deno.test("only the host can update valid waiting-room settings", () => {
     throw new Error("underfunded settings update accepted");
   }
 });
+
+Deno.test("any active player can reset an ended room into a fresh waiting-room rematch", () => {
+  const state = room();
+  state.phase = { ended: {} };
+  state.startingStack = 1_000;
+  state.smallBlind = 10;
+  state.board = [cards[0], cards[1], cards[2], cards[3], cards[4]];
+  state.pot = 75;
+  state.handID = "old-hand";
+  state.activePlayerID = "a";
+  state.completedHandCount = 8;
+  state.manualFinishTieAttempts = 1;
+  state.handStats = { a: { handsWon: 3 }, b: { handsWon: 2 } };
+  state.endStats = [{ id: "a" }];
+  const seats = state.players as Array<Record<string, unknown>>;
+  seats[0].stack = 0;
+  seats[0].isEliminated = true;
+  seats[0].isDealer = true;
+  seats[0].isFolded = true;
+  seats[0].isReady = true;
+  seats[0].currentBet = 20;
+  seats[1].stack = 925;
+  seats[1].isReady = true;
+
+  const result = applyCommandWithDeck(
+    state, { remainingDeck: cards.slice(), holeCardsByPlayer: { a: cards.slice(0, 2) } }, "b", { kind: "resetRoom" }, cards,
+  );
+  const next = result.publicState as Record<string, unknown>;
+  const nextSeats = next.players as Array<Record<string, unknown>>;
+  if (JSON.stringify(next.phase) !== JSON.stringify({ waiting: {} }) || next.smallBlind !== 10 || next.startingStack !== 1_000) {
+    throw new Error("reset did not preserve the configured lobby settings");
+  }
+  if (nextSeats.some((seat) => seat.stack !== 1_000 || seat.isReady || seat.isDealer || seat.isFolded || seat.isEliminated || seat.currentBet !== 0)) {
+    throw new Error("reset did not restore player seats for a fresh match");
+  }
+  if (next.handID !== null || next.pot !== 0 || (next.board as unknown[]).some(Boolean) || next.completedHandCount !== 0
+    || next.manualFinishTieAttempts !== 0 || Object.keys(next.handStats as object).length || (next.endStats as unknown[]).length) {
+    throw new Error("reset retained previous-match state");
+  }
+  const runtime = result.privateState as Record<string, unknown>;
+  if ((runtime.remainingDeck as unknown[]).length || Object.keys(runtime.holeCardsByPlayer as object).length) {
+    throw new Error("reset retained private cards");
+  }
+});
+
+Deno.test("reset removes sitting-out seats and rejects reset before a game ends", () => {
+  const state = room();
+  state.phase = { ended: {} };
+  const seats = state.players as Array<Record<string, unknown>>;
+  seats[1].isSittingOut = true;
+  const result = applyCommandWithDeck(state, { remainingDeck: [], holeCardsByPlayer: {} }, "a", { kind: "resetRoom" }, cards);
+  const nextSeats = (result.publicState as Record<string, unknown>).players as Array<Record<string, unknown>>;
+  if (nextSeats.length !== 1 || nextSeats[0].id !== "a") throw new Error("sitting-out seat was retained");
+
+  let rejected = false;
+  try { applyCommandWithDeck(room(), { remainingDeck: [], holeCardsByPlayer: {} }, "a", { kind: "resetRoom" }, cards); }
+  catch (error) { rejected = error instanceof Error && error.message === "illegal_phase"; }
+  if (!rejected) throw new Error("reset was accepted before game end");
+});

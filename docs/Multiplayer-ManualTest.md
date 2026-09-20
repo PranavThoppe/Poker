@@ -8,9 +8,11 @@ Run a Debug build on two devices or simulators with different device IDs. Use De
 |---|------|-----------------|
 | 1 | Device A sends a Classic Poker bubble. | A room opens with A in the waiting room. |
 | 2 | Device B taps the bubble. | The same room opens with both players listed once. |
-| 3 | Both players tap Ready. | Ready state matches on both devices. |
-| 4 | Device A starts the game. | Both devices enter play with matching dealer, blinds, pot, active player, and stacks. |
-| 5 | Inspect private cards. | Each device sees only its own two cards. |
+| 3 | Device A edits the starting stack and small blind, then saves. | Both devices show the same stack and blind values; all Ready states clear. |
+| 4 | Device B attempts to edit settings. | Settings are read-only for Device B. |
+| 5 | Both players tap Ready. | Ready state matches on both devices. |
+| 6 | Device A starts the game. | Both devices enter play with matching dealer, configured blinds, pot, active player, and stacks. |
+| 7 | Inspect private cards. | Each device sees only its own two cards. |
 
 ## Betting and streets
 

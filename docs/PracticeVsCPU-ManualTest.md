@@ -7,7 +7,8 @@ Run in **Debug** on device or simulator. Filter the Xcode console with **`[Game]
 1. Open the iMessage extension (expanded view).
 2. On game selection, choose **Practice vs CPU** (not Classic Poker).
 3. Tap **Play** — you should land in the waiting room locally (no bubble sent).
-4. Tap **Ready**, then **Start**.
+4. Edit the starting stack and small blind, then save; confirm the displayed big blind updates to twice the small blind.
+5. Tap **Ready**, then **Start**; confirm every bot receives the configured stack and the opening pot uses the configured blinds.
 
 **Expected `[Game]` at start**
 

@@ -6,7 +6,11 @@ struct PokerEngine {
     static let startingStack = 500
 
     func smallBlind(for state: GameState) -> Int {
-        max(state.smallBlind ?? Self.smallBlind, Self.smallBlind)
+        max(state.smallBlind ?? Self.smallBlind, 1)
+    }
+
+    func startingStack(for state: GameState) -> Int {
+        max(state.startingStack ?? Self.startingStack, 1)
     }
 
     func bigBlind(for state: GameState) -> Int {

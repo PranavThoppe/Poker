@@ -34,3 +34,48 @@ Deno.test("wrong actor cannot act", () => {
   catch (error) { rejected = error instanceof Error && error.message === "not_your_turn"; }
   if (!rejected) throw new Error("out-of-turn action accepted");
 });
+
+Deno.test("host updates waiting-room settings for every player and resets readiness", () => {
+  const state = room();
+  const result = applyCommandWithDeck(
+    state, { remainingDeck: [], holeCardsByPlayer: {} }, "a",
+    { kind: "updateSettings", startingStack: 1_000, smallBlind: 10 }, cards,
+  );
+  const next = result.publicState as Record<string, unknown>;
+  const seats = next.players as Array<Record<string, unknown>>;
+  if (next.startingStack !== 1_000 || next.smallBlind !== 10) throw new Error("settings not saved");
+  if (seats.some((seat) => seat.stack !== 1_000 || seat.isReady !== false)) {
+    throw new Error("settings did not reset player stacks and readiness");
+  }
+});
+
+Deno.test("configured one-chip small blind is used when the game starts", () => {
+  const state = room();
+  state.smallBlind = 1;
+  state.startingStack = 100;
+  const result = applyCommandWithDeck(
+    state, { remainingDeck: [], holeCardsByPlayer: {} }, "a", { kind: "startGame" }, cards,
+  );
+  const next = result.publicState as Record<string, unknown>;
+  const seats = next.players as Array<Record<string, unknown>>;
+  if (next.pot !== 3 || seats[0].stack !== 499 || seats[1].stack !== 498) {
+    throw new Error("configured blinds were not posted");
+  }
+});
+
+Deno.test("only the host can update valid waiting-room settings", () => {
+  const invalid = (actor: string, command: { kind: "updateSettings"; startingStack: number; smallBlind: number }) => {
+    try {
+      applyCommandWithDeck(room(), { remainingDeck: [], holeCardsByPlayer: {} }, actor, command, cards);
+      return false;
+    } catch (error) {
+      return error instanceof Error && error.message === "illegal_settings_change";
+    }
+  };
+  if (!invalid("b", { kind: "updateSettings", startingStack: 1_000, smallBlind: 10 })) {
+    throw new Error("guest settings update accepted");
+  }
+  if (!invalid("a", { kind: "updateSettings", startingStack: 100, smallBlind: 5 })) {
+    throw new Error("underfunded settings update accepted");
+  }
+});

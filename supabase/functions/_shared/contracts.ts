@@ -10,6 +10,7 @@ export type GameCommand =
   | { kind: "advanceSummary" }
   | { kind: "startNextHand" }
   | { kind: "setSittingOut"; sittingOut: boolean }
+  | { kind: "updateSettings"; startingStack: number; smallBlind: number }
   | { kind: "raiseBlinds"; smallBlind: number }
   | { kind: "endGame"; reason: string }
   | { kind: "resetRoom" };
@@ -27,7 +28,7 @@ export interface RequestBody {
 }
 
 const operations = new Set(["create-room", "join-room", "room-state", "game-command"]);
-const commandKinds = new Set(["setReady", "startGame", "bet", "showCards", "advanceSummary", "startNextHand", "setSittingOut", "raiseBlinds", "endGame", "resetRoom"]);
+const commandKinds = new Set(["setReady", "startGame", "bet", "showCards", "advanceSummary", "startNextHand", "setSittingOut", "updateSettings", "raiseBlinds", "endGame", "resetRoom"]);
 
 export function parseRequest(value: unknown): RequestBody | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -42,6 +43,12 @@ export function parseRequest(value: unknown): RequestBody | null {
     const command = body.command as Record<string, unknown>;
     if (command.kind === "setReady" && typeof command.ready !== "boolean") return null;
     if (command.kind === "setSittingOut" && typeof command.sittingOut !== "boolean") return null;
+    if (command.kind === "updateSettings") {
+      const stack = command.startingStack, smallBlind = command.smallBlind;
+      if (typeof stack !== "number" || !Number.isSafeInteger(stack) || stack < 100 || stack > 100_000
+        || typeof smallBlind !== "number" || !Number.isSafeInteger(smallBlind) || smallBlind < 1 || smallBlind > 5_000
+        || stack < smallBlind * 40) return null;
+    }
     if (command.kind === "raiseBlinds" && (!Number.isSafeInteger(command.smallBlind) || (command.smallBlind as number) <= 0)) return null;
     if (command.kind === "bet") {
       if (!["fold", "check", "call", "raise"].includes(command.betKind as string)) return null;
@@ -77,7 +84,7 @@ export function viewerState(publicState: JsonObject, privateState: JsonObject | 
   const hero = players.find(player => player.id === playerID);
   const integer = (value: Json | undefined, fallback = 0) => typeof value === "number" && Number.isSafeInteger(value) ? value : fallback;
   const currentBet = integer(hero?.currentBet), streetBet = integer(result.streetBetLevel);
-  const smallBlind = Math.max(5, integer(result.smallBlind, 5));
+  const smallBlind = Math.max(1, integer(result.smallBlind, 5));
   const minimumRaise = streetBet + Math.max(integer(result.lastRaiseSize, smallBlind * 2), smallBlind * 2);
   const heroTotal = currentBet + integer(hero?.stack);
   const opponentTotals = players

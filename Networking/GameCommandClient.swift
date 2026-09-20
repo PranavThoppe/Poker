@@ -10,11 +10,12 @@ enum GameCommand: Encodable, Equatable {
     case advanceSummary
     case startNextHand
     case setSittingOut(Bool)
+    case updateSettings(startingStack: Int, smallBlind: Int)
     case raiseBlinds(Int)
     case endGame(GameEndReason)
     case resetRoom
 
-    enum CodingKeys: String, CodingKey { case kind, ready, betKind, amount, sittingOut, smallBlind, reason }
+    enum CodingKeys: String, CodingKey { case kind, ready, betKind, amount, sittingOut, startingStack, smallBlind, reason }
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         switch self {
@@ -25,6 +26,10 @@ enum GameCommand: Encodable, Equatable {
         case .advanceSummary: try c.encode("advanceSummary", forKey: .kind)
         case .startNextHand: try c.encode("startNextHand", forKey: .kind)
         case .setSittingOut(let value): try c.encode("setSittingOut", forKey: .kind); try c.encode(value, forKey: .sittingOut)
+        case .updateSettings(let startingStack, let smallBlind):
+            try c.encode("updateSettings", forKey: .kind)
+            try c.encode(startingStack, forKey: .startingStack)
+            try c.encode(smallBlind, forKey: .smallBlind)
         case .raiseBlinds(let value): try c.encode("raiseBlinds", forKey: .kind); try c.encode(value, forKey: .smallBlind)
         case .endGame(let reason): try c.encode("endGame", forKey: .kind); try c.encode(reason, forKey: .reason)
         case .resetRoom: try c.encode("resetRoom", forKey: .kind)

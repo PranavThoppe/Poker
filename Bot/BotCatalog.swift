@@ -15,14 +15,14 @@ enum BotCatalog {
         BotPreset(id: "bot-rose", name: "Rose", avatarIndex: 4),
     ]
 
-    static func makeBots(count: Int) -> [Player] {
+    static func makeBots(count: Int, startingStack: Int = PokerEngine.startingStack) -> [Player] {
         guard count > 0 else { return [] }
         return (0..<count).map { i in
             let preset = presets[i % presets.count]
             return Player(
                 id: preset.id,
                 name: preset.name,
-                stack: PokerEngine.startingStack,
+                stack: startingStack,
                 isReady: true,
                 avatarIndex: preset.avatarIndex,
                 isBot: true

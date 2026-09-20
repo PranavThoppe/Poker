@@ -265,6 +265,9 @@ struct GameState: Codable {
     var stateVersion: Int? = nil
     var gameMode: GameMode = .classicPoker
     var phase: GamePhase = .waiting
+    /// Chips assigned to every player before the first hand. `nil` preserves the
+    /// original 500-chip stack for rooms created before lobby settings existed.
+    var startingStack: Int? = nil
     /// The small blind for the next hand. `nil` preserves the original 5/10 level for rooms
     /// created before configurable blinds were introduced.
     var smallBlind: Int? = nil

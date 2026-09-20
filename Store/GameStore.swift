@@ -103,7 +103,7 @@ final class GameStore: ObservableObject {
             }
             return
         }
-        state.players.append(Player(id: playerID, name: name, stack: PokerEngine.startingStack, avatarIndex: avatarIndex))
+        state.players.append(Player(id: playerID, name: name, stack: engine.startingStack(for: state), avatarIndex: avatarIndex))
         if state.heroID == nil {
             state.heroID = playerID
         }
@@ -125,6 +125,43 @@ final class GameStore: ObservableObject {
     }
 
     // MARK: - Ready state
+
+    static let minimumStartingStack = 100
+    static let maximumStartingStack = 100_000
+    static let minimumSmallBlind = 1
+    static let maximumSmallBlind = 5_000
+
+    var tableStartingStack: Int {
+        engine.startingStack(for: state)
+    }
+
+    var canEditWaitingRoomSettings: Bool {
+        state.phase == .waiting
+            && (state.gameMode == .practiceVsCPU || (state.gameMode == .classicPoker && isHost))
+    }
+
+    func areValidWaitingRoomSettings(startingStack: Int, smallBlind: Int) -> Bool {
+        (Self.minimumStartingStack...Self.maximumStartingStack).contains(startingStack)
+            && (Self.minimumSmallBlind...Self.maximumSmallBlind).contains(smallBlind)
+            && startingStack >= smallBlind * 40
+    }
+
+    /// The host changes both pre-game values together, which also asks every
+    /// player to explicitly re-confirm readiness at the revised stakes.
+    func updateWaitingRoomSettings(startingStack: Int, smallBlind: Int) {
+        guard canEditWaitingRoomSettings,
+              areValidWaitingRoomSettings(startingStack: startingStack, smallBlind: smallBlind) else { return }
+        if state.gameMode == .classicPoker {
+            submit(.updateSettings(startingStack: startingStack, smallBlind: smallBlind))
+        } else {
+            state.startingStack = startingStack
+            state.smallBlind = smallBlind
+            for index in state.players.indices {
+                state.players[index].stack = startingStack
+                state.players[index].isReady = false
+            }
+        }
+    }
 
     func toggleReady() {
         if state.gameMode == .classicPoker { submit(.setReady(!(state.players.first { $0.id == state.heroID }?.isReady ?? false))); return }
@@ -469,6 +506,8 @@ final class GameStore: ObservableObject {
         fresh.gameID = state.gameID
         fresh.hostID = state.hostID
         fresh.gameMode = state.gameMode
+        fresh.startingStack = state.startingStack
+        fresh.smallBlind = state.smallBlind
         fresh.players = state.players
             .filter { !$0.isBot }
             .map { p in
@@ -479,7 +518,7 @@ final class GameStore: ObservableObject {
                 np.isSittingOut = false
                 np.isDealer = false
                 np.currentBet = 0
-                np.stack = PokerEngine.startingStack
+                np.stack = engine.startingStack(for: state)
                 return np
             }
         fresh.heroID = state.heroID
@@ -1003,7 +1042,10 @@ final class GameStore: ObservableObject {
 
     private func seedBots() {
         state.players.removeAll { $0.isBot }
-        state.players.append(contentsOf: BotCatalog.makeBots(count: botSessionConfig.botCount))
+        state.players.append(contentsOf: BotCatalog.makeBots(
+            count: botSessionConfig.botCount,
+            startingStack: engine.startingStack(for: state)
+        ))
         botStrategy = makeStrategy(for: botSessionConfig)
     }
 

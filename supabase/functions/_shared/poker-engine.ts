@@ -13,6 +13,9 @@ const suits=["♥","♦","♣","♠"];
 const ranks=["2","3","4","5","6","7","8","9","10","J","Q","K","A"];
 
 const cp=<T>(x:T):T=>structuredClone(x);
+const phaseName=(phase:unknown):string=>typeof phase==="string"?phase:
+  phase&&typeof phase==="object"&&!Array.isArray(phase)?Object.keys(phase as Record<string,unknown>)[0]??"":"";
+const wirePhase=(phase:string)=>({[phase]:{}});
 const n=(x:any,d=0)=>Number.isSafeInteger(x)?x:d;
 const on=(x:any)=>x===true;
 const ps=(s:S):P[]=>(s.players??=[]);
@@ -71,6 +74,9 @@ export function applyCommand(a:JsonObject,b:JsonObject,id:string,c:GameCommand):
 }
 function go(pub:JsonObject,priv:JsonObject,id:string,c:GameCommand,f:()=>Card[]):Transition{
   const s=cp(pub)as S;
+  // Swift's synthesized Codable enum is stored as `{ waiting: {} }`, while
+  // the poker engine uses string phase names internally.
+  s.phase=phaseName(s.phase);
   const r=rt(cp(priv)as JsonObject);
   const p=getPlayer(s,id);
   switch(c.kind){
@@ -113,7 +119,9 @@ function go(pub:JsonObject,priv:JsonObject,id:string,c:GameCommand,f:()=>Card[])
       break;
   }
   ui(s);
-  return{publicState:s,privateState:r as unknown as JsonObject,deadlineAt:deadline(s)};
+  const deadlineAt=deadline(s);
+  s.phase=wirePhase(s.phase);
+  return{publicState:s,privateState:r as unknown as JsonObject,deadlineAt};
 }
 /** Function callers invoke this before reads and commands. */
 export function applyExpiredDeadline(pub:JsonObject,priv:JsonObject,at:string|null,now=new Date()):Transition|null{
@@ -121,6 +129,7 @@ export function applyExpiredDeadline(pub:JsonObject,priv:JsonObject,at:string|nu
   if(!Number.isFinite(time)||time>now.getTime())return null;
   
   const s=cp(pub)as S;
+  s.phase=phaseName(s.phase);
   const r=rt(cp(priv)as JsonObject);
   
   if(s.phase!=="showdown")return null;
@@ -133,7 +142,9 @@ export function applyExpiredDeadline(pub:JsonObject,priv:JsonObject,at:string|nu
   }
   
   ui(s);
-  return{publicState:s,privateState:r as unknown as JsonObject,deadlineAt:deadline(s)};
+  const deadlineAt=deadline(s);
+  s.phase=wirePhase(s.phase);
+  return{publicState:s,privateState:r as unknown as JsonObject,deadlineAt};
 }
 function dealer(s:S){
   return Math.max(0,ps(s).findIndex(p=>on(p.isDealer)));
@@ -148,21 +159,24 @@ function scan(s:S,from:number,fn:(p:P)=>boolean,inc=false){
   return null;
 }
 function settings(s:S,id:string,stack:number,smallBlind:number){
-  const isHost=!s.hostID||s.hostID===id;
   const validStack=Number.isSafeInteger(stack)&&stack>=100&&stack<=100000;
   const validSmallBlind=Number.isSafeInteger(smallBlind)&&smallBlind>=1&&smallBlind<=5000;
   const validRatio=stack>=smallBlind*40;
   
-  if(s.phase!=="waiting"||!isHost||!validStack||!validSmallBlind||!validRatio){
+  if(s.phase!=="waiting"||!ps(s).some(p=>p.id===id)||!validStack||!validSmallBlind||!validRatio){
     fail("illegal_settings_change");
   }
-  
+
+  const changed=n(s.startingStack,500)!==stack||n(s.smallBlind,SB)!==smallBlind;
+  if(!changed)return;
+
   s.startingStack=stack;
   s.smallBlind=smallBlind;
   ps(s).forEach(p=>{
     p.stack=stack;
     p.isReady=false;
   });
+  s.lobbySettingsAnnouncement={id:crypto.randomUUID(),startingStack:stack,smallBlind};
 }
 function blinds(s:S):[number,number]|null{
   const eligiblePlayers=ps(s).filter(eligible);
@@ -855,6 +869,7 @@ function reset(s:S,r:PokerRuntime,id:string){
   s.actedThisStreet=[];
   s.lastAggressorID=null;
   s.blindIncreaseAnnouncement=null;
+  s.lobbySettingsAnnouncement=null;
   
   r.remainingDeck=[];
   r.holeCardsByPlayer={};

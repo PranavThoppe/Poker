@@ -1,12 +1,14 @@
 import SwiftUI
+import UIKit
 
 struct WaitingRoomView: View {
     @EnvironmentObject var store: GameStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var readyPulse = 0
     @State private var isShowingSettings = false
-    @State private var isEditingSettings = false
     @State private var startingStackText = ""
     @State private var smallBlindText = ""
+    @State private var isSettingsConfirmationPulseComplete = false
 
     private var players: [Player] { store.state.players }
     private var heroID: String? { store.state.heroID }
@@ -29,6 +31,11 @@ struct WaitingRoomView: View {
                 Spacer().frame(height: Theme.Spacing.xl)
 
                 playerList
+
+                if let confirmation = store.lobbySettingsConfirmation {
+                    lobbySettingsConfirmation(confirmation)
+                        .padding(.top, Theme.Spacing.md)
+                }
 
                 settingsButton
                     .padding(.top, Theme.Spacing.md)
@@ -67,7 +74,7 @@ struct WaitingRoomView: View {
 
     private var settingsButton: some View {
         Button {
-            isEditingSettings = false
+            beginEditingSettings()
             isShowingSettings = true
         } label: {
             HStack {
@@ -93,45 +100,7 @@ struct WaitingRoomView: View {
 
     private var settingsPopover: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            HStack {
-                Text("Game Settings")
-                    .font(Theme.Font.subhead)
-                    .foregroundStyle(Theme.Color.primary)
-
-                Spacer()
-
-                if !isEditingSettings {
-                    Button("Edit") { beginEditingSettings() }
-                        .font(Theme.Font.body)
-                        .foregroundStyle(store.canEditWaitingRoomSettings ? Theme.Color.green : Theme.Color.secondary)
-                        .disabled(!store.canEditWaitingRoomSettings)
-                }
-            }
-
-            if isEditingSettings {
-                settingsEditor
-            } else {
-                HStack(spacing: Theme.Spacing.lg) {
-                    settingValue(title: "Starting stack", value: "\(store.tableStartingStack)")
-                    settingValue(title: "Blinds", value: "\(store.tableSmallBlind) / \(store.tableSmallBlind * 2)")
-                }
-                if !store.canEditWaitingRoomSettings {
-                    Text("Only the host can change settings before the game starts.")
-                        .font(Theme.Font.caption)
-                        .foregroundStyle(Theme.Color.secondary)
-                }
-            }
-        }
-    }
-
-    private func settingValue(title: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-            Text(title)
-                .font(Theme.Font.caption)
-                .foregroundStyle(Theme.Color.secondary)
-            Text(value)
-                .font(Theme.Font.subhead)
-                .foregroundStyle(Theme.Color.primary)
+            settingsEditor
         }
     }
 
@@ -154,7 +123,9 @@ struct WaitingRoomView: View {
             }
 
             HStack {
-                Button("Cancel") { isEditingSettings = false }
+                Button("Cancel") {
+                    isShowingSettings = false
+                }
                     .font(Theme.Font.body)
                     .foregroundStyle(Theme.Color.secondary)
 
@@ -174,11 +145,7 @@ struct WaitingRoomView: View {
                 .font(Theme.Font.body)
                 .foregroundStyle(Theme.Color.primary)
             Spacer()
-            TextField(title, text: text)
-                .font(Theme.Font.body)
-                .foregroundStyle(Theme.Color.primary)
-                .multilineTextAlignment(.trailing)
-                .keyboardType(.numberPad)
+            SettingsNumberField(text: text)
                 .frame(width: 104)
                 .padding(.horizontal, Theme.Spacing.sm)
                 .padding(.vertical, Theme.Spacing.xs)
@@ -193,6 +160,7 @@ struct WaitingRoomView: View {
     private var canSaveSettings: Bool {
         guard let startingStack = editedStartingStack, let smallBlind = editedSmallBlind else { return false }
         return store.areValidWaitingRoomSettings(startingStack: startingStack, smallBlind: smallBlind)
+            && (startingStack != store.tableStartingStack || smallBlind != store.tableSmallBlind)
     }
 
     private var settingsValidationMessage: String? {
@@ -215,14 +183,58 @@ struct WaitingRoomView: View {
     private func beginEditingSettings() {
         startingStackText = String(store.tableStartingStack)
         smallBlindText = String(store.tableSmallBlind)
-        isEditingSettings = true
     }
 
     private func saveSettings() {
         guard let startingStack = editedStartingStack, let smallBlind = editedSmallBlind else { return }
-        store.updateWaitingRoomSettings(startingStack: startingStack, smallBlind: smallBlind)
-        isEditingSettings = false
-        isShowingSettings = false
+        store.updateWaitingRoomSettings(startingStack: startingStack, smallBlind: smallBlind) { acceptedOrRefreshed in
+            guard acceptedOrRefreshed else { return }
+            isShowingSettings = false
+        }
+    }
+
+    private func lobbySettingsConfirmation(_ message: String) -> some View {
+        Label(message, systemImage: "checkmark.circle.fill")
+            .font(.system(size: 14, weight: .regular))
+            .foregroundStyle(Theme.Color.primary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(Theme.Color.green.opacity(0.9)))
+            .overlay {
+                if !reduceMotion {
+                    Capsule()
+                        .stroke(Theme.Color.green.opacity(0.8), lineWidth: 2)
+                        .scaleEffect(isSettingsConfirmationPulseComplete ? 1.28 : 1)
+                        .opacity(isSettingsConfirmationPulseComplete ? 0 : 0.75)
+                        .allowsHitTesting(false)
+                }
+            }
+            .shadow(
+                color: reduceMotion ? .clear : Theme.Color.green.opacity(0.45),
+                radius: isSettingsConfirmationPulseComplete ? 5 : 10
+            )
+            .fixedSize()
+            .accessibilityLabel(message)
+            .transition(reduceMotion ? .opacity : .scale(scale: 0.86).combined(with: .opacity))
+            .animation(
+                reduceMotion ? .easeInOut(duration: 0.2) : .spring(response: 0.42, dampingFraction: 0.68),
+                value: store.lobbySettingsConfirmation
+            )
+            .task(id: message) {
+                isSettingsConfirmationPulseComplete = false
+                guard !reduceMotion else { return }
+
+                do {
+                    try await Task.sleep(for: .milliseconds(180))
+                } catch {
+                    return
+                }
+
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeOut(duration: 0.45)) {
+                    isSettingsConfirmationPulseComplete = true
+                }
+            }
     }
 
     private var playerList: some View {
@@ -275,6 +287,50 @@ struct WaitingRoomView: View {
                 .clipShape(Capsule())
         }
         .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+}
+
+/// Keeps the initial insertion point at the beginning of a settings value.
+private struct SettingsNumberField: UIViewRepresentable {
+    @Binding var text: String
+
+    func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
+
+    func makeUIView(context: Context) -> UITextField {
+        let field = UITextField()
+        field.delegate = context.coordinator
+        field.addTarget(context.coordinator, action: #selector(Coordinator.textChanged(_:)), for: .editingChanged)
+        field.font = .systemFont(ofSize: 14)
+        field.textColor = .white
+        field.textAlignment = .right
+        field.keyboardType = .numberPad
+        field.text = text
+        return field
+    }
+
+    func updateUIView(_ field: UITextField, context: Context) {
+        context.coordinator.text = $text
+        if field.text != text {
+            field.text = text
+        }
+    }
+
+    final class Coordinator: NSObject, UITextFieldDelegate {
+        var text: Binding<String>
+
+        init(text: Binding<String>) {
+            self.text = text
+        }
+
+        @objc func textChanged(_ field: UITextField) {
+            text.wrappedValue = field.text ?? ""
+        }
+
+        func textFieldDidBeginEditing(_ field: UITextField) {
+            let beginning = field.beginningOfDocument
+            guard let range = field.textRange(from: beginning, to: beginning) else { return }
+            field.selectedTextRange = range
+        }
     }
 }
 

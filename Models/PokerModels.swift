@@ -253,6 +253,12 @@ struct BlindIncreaseAnnouncement: Codable, Equatable {
     let smallBlind: Int
 }
 
+struct LobbySettingsAnnouncement: Codable, Equatable {
+    let id: UUID
+    let startingStack: Int
+    let smallBlind: Int
+}
+
 struct GameState: Codable {
     /// Stable session identifier for this game; encoded in the iMessage bubble URL.
     var gameID: UUID = UUID()
@@ -273,6 +279,8 @@ struct GameState: Codable {
     var smallBlind: Int? = nil
     /// The most recent blind-change announcement. Optional for rooms written before this existed.
     var blindIncreaseAnnouncement: BlindIncreaseAnnouncement? = nil
+    /// Most recent accepted waiting-room settings change.
+    var lobbySettingsAnnouncement: LobbySettingsAnnouncement? = nil
     var players: [Player] = []
     var board: [Card?] = Array(repeating: nil, count: 5)
     var pot: Int = 0

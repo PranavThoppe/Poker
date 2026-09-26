@@ -24,7 +24,9 @@ Deno.test("heads-up deal posts button small blind and hides opponent cards", () 
   const view = viewerState(result.publicState, result.privateState, "a") as Record<string, unknown>;
   if (JSON.stringify(view.heroHoleCards) !== JSON.stringify(cards.slice(0, 2))) throw new Error("missing hero cards");
   if (JSON.stringify(view).includes(JSON.stringify(cards.slice(2, 4)))) throw new Error("opponent cards leaked");
-  if ("remainingDeck" in view || "holeCardsByPlayer" in view) throw new Error("runtime leaked");
+  if (JSON.stringify(view.remainingDeck) !== "[]" || JSON.stringify(view.holeCardsByPlayer) !== "{}") {
+    throw new Error("runtime leaked");
+  }
 });
 
 Deno.test("wrong actor cannot act", () => {
@@ -35,10 +37,10 @@ Deno.test("wrong actor cannot act", () => {
   if (!rejected) throw new Error("out-of-turn action accepted");
 });
 
-Deno.test("host updates waiting-room settings for every player and resets readiness", () => {
+Deno.test("any seated player updates waiting-room settings and resets readiness", () => {
   const state = room();
   const result = applyCommandWithDeck(
-    state, { remainingDeck: [], holeCardsByPlayer: {} }, "a",
+    state, { remainingDeck: [], holeCardsByPlayer: {} }, "b",
     { kind: "updateSettings", startingStack: 1_000, smallBlind: 10 }, cards,
   );
   const next = result.publicState as Record<string, unknown>;
@@ -46,6 +48,13 @@ Deno.test("host updates waiting-room settings for every player and resets readin
   if (next.startingStack !== 1_000 || next.smallBlind !== 10) throw new Error("settings not saved");
   if (seats.some((seat) => seat.stack !== 1_000 || seat.isReady !== false)) {
     throw new Error("settings did not reset player stacks and readiness");
+  }
+  const announcement = next.lobbySettingsAnnouncement as Record<string, unknown>;
+  if (announcement.startingStack !== 1_000 || announcement.smallBlind !== 10 || typeof announcement.id !== "string") {
+    throw new Error("accepted settings change did not announce its values");
+  }
+  if (JSON.stringify(next.phase) !== JSON.stringify({ waiting: {} })) {
+    throw new Error("server transition did not preserve Swift's waiting phase format");
   }
 });
 
@@ -63,20 +72,41 @@ Deno.test("configured one-chip small blind is used when the game starts", () => 
   }
 });
 
-Deno.test("only the host can update valid waiting-room settings", () => {
+Deno.test("invalid settings and non-members are rejected", () => {
   const invalid = (actor: string, command: { kind: "updateSettings"; startingStack: number; smallBlind: number }) => {
     try {
       applyCommandWithDeck(room(), { remainingDeck: [], holeCardsByPlayer: {} }, actor, command, cards);
       return false;
     } catch (error) {
-      return error instanceof Error && error.message === "illegal_settings_change";
+      return error instanceof Error && ["illegal_settings_change", "not_room_member"].includes(error.message);
     }
   };
-  if (!invalid("b", { kind: "updateSettings", startingStack: 1_000, smallBlind: 10 })) {
-    throw new Error("guest settings update accepted");
-  }
   if (!invalid("a", { kind: "updateSettings", startingStack: 100, smallBlind: 5 })) {
     throw new Error("underfunded settings update accepted");
+  }
+  if (!invalid("outsider", { kind: "updateSettings", startingStack: 1_000, smallBlind: 10 })) {
+    throw new Error("non-member settings update accepted");
+  }
+  const live = room();
+  live.phase = { handSummary: {} };
+  try {
+    applyCommandWithDeck(live, { remainingDeck: [], holeCardsByPlayer: {} }, "b",
+      { kind: "updateSettings", startingStack: 1_000, smallBlind: 10 }, cards);
+    throw new Error("non-waiting settings update accepted");
+  } catch (error) {
+    if (error instanceof Error && error.message === "non-waiting settings update accepted") throw error;
+  }
+});
+
+Deno.test("unchanged settings preserve readiness and do not emit an announcement", () => {
+  const state = room();
+  const result = applyCommandWithDeck(state, { remainingDeck: [], holeCardsByPlayer: {} }, "b",
+    { kind: "updateSettings", startingStack: 500, smallBlind: 5 }, cards);
+  const next = result.publicState as Record<string, unknown>;
+  const seats = next.players as Array<Record<string, unknown>>;
+  if (seats.some((seat) => seat.isReady !== true)) throw new Error("unchanged settings reset readiness");
+  if (next.lobbySettingsAnnouncement !== undefined && next.lobbySettingsAnnouncement !== null) {
+    throw new Error("unchanged settings emitted an announcement");
   }
 });
 

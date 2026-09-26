@@ -6,6 +6,7 @@ final class GameStore: ObservableObject {
     @Published var state: GameState
     @Published var showManualFinishTieWarning = false
     @Published var blindIncreaseConfirmation: String?
+    @Published var lobbySettingsConfirmation: String?
     @Published private(set) var isSubmittingCommand = false
     @Published private(set) var multiplayerError: String?
     /// Retained verbatim after a transport failure so retrying cannot apply a
@@ -26,7 +27,9 @@ final class GameStore: ObservableObject {
     private var showdownAdvanceTask: Task<Void, Never>?
     private var boardRevealFallbackTask: Task<Void, Never>?
     private var blindIncreaseConfirmationTask: Task<Void, Never>?
+    private var lobbySettingsConfirmationTask: Task<Void, Never>?
     private var lastHandledBlindIncreaseAnnouncementID: UUID?
+    private var lastHandledLobbySettingsAnnouncementID: UUID?
     private var hasReceivedInitialRoomState = false
     private var lastShowdownTimeoutID: String?
     /// Reopening a room is an intent to return. During a live hand the intent stays local
@@ -62,6 +65,7 @@ final class GameStore: ObservableObject {
         showdownAdvanceTask?.cancel()
         boardRevealFallbackTask?.cancel()
         blindIncreaseConfirmationTask?.cancel()
+        lobbySettingsConfirmationTask?.cancel()
     }
 
     /// Hand rank shown under the hero avatar — frozen during a board flip.
@@ -137,7 +141,7 @@ final class GameStore: ObservableObject {
 
     var canEditWaitingRoomSettings: Bool {
         state.phase == .waiting
-            && (state.gameMode == .practiceVsCPU || (state.gameMode == .classicPoker && isHost))
+            && (state.gameMode == .practiceVsCPU || state.gameMode == .classicPoker)
     }
 
     func areValidWaitingRoomSettings(startingStack: Int, smallBlind: Int) -> Bool {
@@ -146,20 +150,21 @@ final class GameStore: ObservableObject {
             && startingStack >= smallBlind * 40
     }
 
-    /// The host changes both pre-game values together, which also asks every
-    /// player to explicitly re-confirm readiness at the revised stakes.
-    func updateWaitingRoomSettings(startingStack: Int, smallBlind: Int) {
+    /// Any seated player changes both pre-game values together.
+    func updateWaitingRoomSettings(startingStack: Int, smallBlind: Int, completion: @escaping (Bool) -> Void) {
         guard canEditWaitingRoomSettings,
-              areValidWaitingRoomSettings(startingStack: startingStack, smallBlind: smallBlind) else { return }
+              areValidWaitingRoomSettings(startingStack: startingStack, smallBlind: smallBlind) else { completion(false); return }
         if state.gameMode == .classicPoker {
-            submit(.updateSettings(startingStack: startingStack, smallBlind: smallBlind))
+            submit(.updateSettings(startingStack: startingStack, smallBlind: smallBlind), completion: completion)
         } else {
+            guard startingStack != tableStartingStack || smallBlind != tableSmallBlind else { completion(true); return }
             state.startingStack = startingStack
             state.smallBlind = smallBlind
             for index in state.players.indices {
                 state.players[index].stack = startingStack
                 state.players[index].isReady = false
             }
+            completion(true)
         }
     }
 
@@ -587,8 +592,8 @@ final class GameStore: ObservableObject {
 
     /// Merges only a server response. The local Swift engine remains exclusive
     /// to practice mode; an action ID is retained by callers for retry safety.
-    private func submit(_ command: GameCommand, actionID: UUID = UUID()) {
-        guard state.gameMode == .classicPoker, let heroID = state.heroID, !isSubmittingCommand else { return }
+    private func submit(_ command: GameCommand, actionID: UUID = UUID(), completion: ((Bool) -> Void)? = nil) {
+        guard state.gameMode == .classicPoker, let heroID = state.heroID, !isSubmittingCommand else { completion?(false); return }
         isSubmittingCommand = true; multiplayerError = nil
         let roomID = state.gameID, version = state.version, handID = state.handID
         Task { [weak self] in
@@ -601,15 +606,18 @@ final class GameStore: ObservableObject {
                 if self.retryableClassicCommand?.actionID == actionID {
                     self.retryableClassicCommand = nil
                 }
+                completion?(true)
             } catch {
                 if Self.isStaleCommandError(error) {
                     // A response from an earlier poll or another player's action won
                     // the race. Refresh before accepting the next tap; retrying this
                     // command would apply it to a different decision.
                     await self.refreshClassicState(roomID: roomID, playerID: heroID)
+                    completion?(true)
                 } else {
                     self.retryableClassicCommand = (command, actionID)
                     self.multiplayerError = error.localizedDescription
+                    completion?(false)
                 }
             }
             self.isSubmittingCommand = false
@@ -1063,19 +1071,35 @@ final class GameStore: ObservableObject {
         }
     }
 
+    private func presentLobbySettingsConfirmation(startingStack: Int, smallBlind: Int) {
+        lobbySettingsConfirmation = "Settings updated: \(startingStack.formatted()) chips · \(smallBlind)/\(smallBlind * 2)"
+        lobbySettingsConfirmationTask?.cancel()
+        lobbySettingsConfirmationTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(2.5))
+            guard let self, !Task.isCancelled else { return }
+            self.lobbySettingsConfirmation = nil
+        }
+    }
+
     /// Establishes the first room response as a baseline, then presents each newer event once.
     private func handleBlindIncreaseAnnouncement(from remote: GameState) {
         guard hasReceivedInitialRoomState else {
             lastHandledBlindIncreaseAnnouncementID = remote.blindIncreaseAnnouncement?.id
+            lastHandledLobbySettingsAnnouncementID = remote.lobbySettingsAnnouncement?.id
             hasReceivedInitialRoomState = true
             return
         }
 
-        guard let announcement = remote.blindIncreaseAnnouncement,
-              announcement.id != lastHandledBlindIncreaseAnnouncementID else { return }
-
-        lastHandledBlindIncreaseAnnouncementID = announcement.id
-        presentBlindIncreaseConfirmation(smallBlind: announcement.smallBlind)
+        if let announcement = remote.blindIncreaseAnnouncement,
+           announcement.id != lastHandledBlindIncreaseAnnouncementID {
+            lastHandledBlindIncreaseAnnouncementID = announcement.id
+            presentBlindIncreaseConfirmation(smallBlind: announcement.smallBlind)
+        }
+        if let lobby = remote.lobbySettingsAnnouncement,
+           lobby.id != lastHandledLobbySettingsAnnouncementID {
+            lastHandledLobbySettingsAnnouncementID = lobby.id
+            presentLobbySettingsConfirmation(startingStack: lobby.startingStack, smallBlind: lobby.smallBlind)
+        }
     }
 
     /// Merges a viewer-scoped server snapshot. `heroHoleCards` belongs to the

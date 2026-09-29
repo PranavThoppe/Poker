@@ -29,6 +29,7 @@ struct ResultsScreenView: View {
     let buttonTitle: String
     let onButton: () -> Void
     var pulsesPrimaryAction: Bool = false
+    var primaryActionDisabled: Bool = false
     var buttonDetail: String? = nil
     var secondaryButtonTitle: String? = nil
     var onSecondaryButton: (() -> Void)? = nil
@@ -243,15 +244,20 @@ struct ResultsScreenView: View {
                     Capsule().fill(buttonFillColor)
                 }
 
-                HStack(spacing: Theme.Spacing.xs) {
-                    Text(buttonTitle)
-                        .font(Theme.Font.actionLabel)
-                        .foregroundStyle(buttonTextColor)
-
-                    if let buttonDetail {
-                        Text(buttonDetail)
+                if primaryActionDisabled {
+                    ProgressView()
+                        .tint(buttonTextColor)
+                } else {
+                    HStack(spacing: Theme.Spacing.xs) {
+                        Text(buttonTitle)
                             .font(Theme.Font.actionLabel)
-                            .foregroundStyle(buttonTextColor.opacity(0.6))
+                            .foregroundStyle(buttonTextColor)
+
+                        if let buttonDetail {
+                            Text(buttonDetail)
+                                .font(Theme.Font.actionLabel)
+                                .foregroundStyle(buttonTextColor.opacity(0.6))
+                        }
                     }
                 }
             }
@@ -259,6 +265,7 @@ struct ResultsScreenView: View {
             .frame(height: Theme.Size.actionPillH)
             .clipShape(Capsule())
         }
+        .disabled(primaryActionDisabled)
         .tapGlowRipple(trigger: primaryActionPulse, color: buttonFillColor)
     }
 

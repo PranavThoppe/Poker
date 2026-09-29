@@ -77,6 +77,7 @@ function go(pub:JsonObject,priv:JsonObject,id:string,c:GameCommand,f:()=>Card[])
   // Swift's synthesized Codable enum is stored as `{ waiting: {} }`, while
   // the poker engine uses string phase names internally.
   s.phase=phaseName(s.phase);
+  s.bettingRound=phaseName(s.bettingRound)||"preFlop";
   const r=rt(cp(priv)as JsonObject);
   const p=getPlayer(s,id);
   switch(c.kind){
@@ -121,6 +122,7 @@ function go(pub:JsonObject,priv:JsonObject,id:string,c:GameCommand,f:()=>Card[])
   ui(s);
   const deadlineAt=deadline(s);
   s.phase=wirePhase(s.phase);
+  s.bettingRound=wirePhase(s.bettingRound);
   return{publicState:s,privateState:r as unknown as JsonObject,deadlineAt};
 }
 /** Function callers invoke this before reads and commands. */
@@ -130,6 +132,7 @@ export function applyExpiredDeadline(pub:JsonObject,priv:JsonObject,at:string|nu
   
   const s=cp(pub)as S;
   s.phase=phaseName(s.phase);
+  s.bettingRound=phaseName(s.bettingRound)||"preFlop";
   const r=rt(cp(priv)as JsonObject);
   
   if(s.phase!=="showdown")return null;
@@ -144,6 +147,7 @@ export function applyExpiredDeadline(pub:JsonObject,priv:JsonObject,at:string|nu
   ui(s);
   const deadlineAt=deadline(s);
   s.phase=wirePhase(s.phase);
+  s.bettingRound=wirePhase(s.bettingRound);
   return{publicState:s,privateState:r as unknown as JsonObject,deadlineAt};
 }
 function dealer(s:S){

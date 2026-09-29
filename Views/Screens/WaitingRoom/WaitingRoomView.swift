@@ -46,6 +46,17 @@ struct WaitingRoomView: View {
             }
             .padding(.horizontal, Theme.Spacing.md)
         }
+        .alert(
+            "Command failed",
+            isPresented: Binding(
+                get: { store.multiplayerError != nil },
+                set: { if !$0 { store.dismissMultiplayerError() } }
+            )
+        ) {
+            Button("OK", role: .cancel) { store.dismissMultiplayerError() }
+        } message: {
+            Text(store.multiplayerError ?? "Please try again.")
+        }
     }
 
     // MARK: - Header
@@ -264,28 +275,44 @@ struct WaitingRoomView: View {
             readyPulse += 1
             store.toggleReady()
         }) {
-            Text(isHeroReady ? "Cancel" : "Ready Up")
-                .font(Theme.Font.actionLabel)
-                .foregroundStyle(isHeroReady ? Theme.Color.secondary : Theme.Color.background)
-                .frame(maxWidth: .infinity)
-                .frame(height: Theme.Size.actionPillH)
-                .background(isHeroReady ? Theme.Color.surface : Theme.Color.primary)
-                .clipShape(Capsule())
+            Group {
+                if store.isSubmittingReadyCommand {
+                    ProgressView()
+                        .tint(isHeroReady ? Theme.Color.secondary : Theme.Color.background)
+                } else {
+                    Text(isHeroReady ? "Cancel" : "Ready Up")
+                        .font(Theme.Font.actionLabel)
+                        .foregroundStyle(isHeroReady ? Theme.Color.secondary : Theme.Color.background)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: Theme.Size.actionPillH)
+            .background(isHeroReady ? Theme.Color.surface : Theme.Color.primary)
+            .clipShape(Capsule())
         }
+        .disabled(store.isSubmittingCommand)
         .tapGlowRipple(trigger: readyPulse, color: Theme.Color.green)
         .animation(.easeInOut(duration: 0.2), value: isHeroReady)
     }
 
     private var startButton: some View {
         Button(action: { store.startGame() }) {
-            Text("Start Game")
-                .font(Theme.Font.actionLabel)
-                .foregroundStyle(Theme.Color.background)
+            Group {
+                if store.isSubmittingStartGame {
+                    ProgressView()
+                        .tint(Theme.Color.background)
+                } else {
+                    Text("Start Game")
+                        .font(Theme.Font.actionLabel)
+                        .foregroundStyle(Theme.Color.background)
+                }
+            }
                 .frame(maxWidth: .infinity)
                 .frame(height: Theme.Size.actionPillH)
                 .background(Theme.Color.green)
                 .clipShape(Capsule())
         }
+        .disabled(store.isSubmittingCommand)
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 }

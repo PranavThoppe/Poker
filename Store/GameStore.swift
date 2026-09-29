@@ -8,7 +8,19 @@ final class GameStore: ObservableObject {
     @Published var blindIncreaseConfirmation: String?
     @Published var lobbySettingsConfirmation: String?
     @Published private(set) var isSubmittingCommand = false
+    @Published private(set) var submittingCommand: GameCommand?
+    var isSubmittingReadyCommand: Bool {
+        guard let command = submittingCommand else { return false }
+        if case .setReady = command { return true }
+        return false
+    }
+    var isSubmittingStartGame: Bool {
+        guard let command = submittingCommand else { return false }
+        if case .startGame = command { return true }
+        return false
+    }
     @Published private(set) var multiplayerError: String?
+    func dismissMultiplayerError() { multiplayerError = nil }
     /// Retained verbatim after a transport failure so retrying cannot apply a
     /// second wager if the first request reached the Function.
     private var retryableClassicCommand: (command: GameCommand, actionID: UUID)?
@@ -594,7 +606,7 @@ final class GameStore: ObservableObject {
     /// to practice mode; an action ID is retained by callers for retry safety.
     private func submit(_ command: GameCommand, actionID: UUID = UUID(), completion: ((Bool) -> Void)? = nil) {
         guard state.gameMode == .classicPoker, let heroID = state.heroID, !isSubmittingCommand else { completion?(false); return }
-        isSubmittingCommand = true; multiplayerError = nil
+        isSubmittingCommand = true; submittingCommand = command; multiplayerError = nil
         let roomID = state.gameID, version = state.version, handID = state.handID
         Task { [weak self] in
             guard let self else { return }
@@ -609,11 +621,50 @@ final class GameStore: ObservableObject {
                 completion?(true)
             } catch {
                 if Self.isStaleCommandError(error) {
-                    // A response from an earlier poll or another player's action won
-                    // the race. Refresh before accepting the next tap; retrying this
-                    // command would apply it to a different decision.
+                    // A response from another room write won the race. Refresh first;
+                    // only startGame is retried below, after its lobby checks pass.
                     await self.refreshClassicState(roomID: roomID, playerID: heroID)
-                    completion?(true)
+                    if case .startGame = command, self.state.phase == .waiting {
+                        if self.state.version > version, self.canStartGame {
+                            do {
+                                let retry = try await GameCommandClient.shared.submit(
+                                    roomID: roomID,
+                                    playerID: heroID,
+                                    version: self.state.version,
+                                    handID: self.state.handID,
+                                    command: command,
+                                    actionID: actionID
+                                )
+                                if let next = retry.state {
+                                    self.mergeServerState(next, serverVersion: retry.serverVersion)
+                                }
+                                self.retryableClassicCommand = nil
+                                completion?(true)
+                            } catch {
+                                await self.refreshClassicState(roomID: roomID, playerID: heroID)
+                                self.multiplayerError = "Couldn't start the game: \(error.localizedDescription)"
+                                completion?(false)
+                            }
+                        } else {
+                            if self.state.version <= version {
+                                self.multiplayerError = "Room refresh did not advance the version (sent \(version), refreshed \(self.state.version))."
+                            } else {
+                                let waitingNames = self.playersRequiredToReadyForNextHand
+                                    .filter { !$0.isReady }
+                                    .map(\.name)
+                                if !waitingNames.isEmpty {
+                                    self.multiplayerError = "Not everyone is ready: \(waitingNames.joined(separator: ", "))."
+                                } else if !self.isHost {
+                                    self.multiplayerError = "Only the host can start this game."
+                                } else {
+                                    self.multiplayerError = "The room is not currently in a startable state."
+                                }
+                            }
+                            completion?(false)
+                        }
+                    } else {
+                        completion?(true)
+                    }
                 } else {
                     self.retryableClassicCommand = (command, actionID)
                     self.multiplayerError = error.localizedDescription
@@ -621,6 +672,7 @@ final class GameStore: ObservableObject {
                 }
             }
             self.isSubmittingCommand = false
+            self.submittingCommand = nil
         }
     }
 

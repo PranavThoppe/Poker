@@ -64,6 +64,14 @@ export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}
 /** Removes runtime deck/all-player cards and injects only the viewer's cards. */
 export function viewerState(publicState: JsonObject, privateState: JsonObject | null, playerID: string): JsonObject {
   const result = structuredClone(publicState) as JsonObject;
+  // Keep Swift's synthesized Codable enum representation on every response,
+  // including rooms whose bettingRound was persisted as an engine string.
+  const enumName = (value: Json | undefined, fallback: string) =>
+    typeof value === "string" ? value
+      : value && typeof value === "object" && !Array.isArray(value) ? Object.keys(value)[0] ?? fallback
+      : fallback;
+  result.phase = { [enumName(result.phase, "waiting")]: {} };
+  result.bettingRound = { [enumName(result.bettingRound, "preFlop")]: {} };
   // Swift's synthesized GameState decoder requires its non-optional runtime
   // properties even when their Swift declarations have defaults. Send harmless
   // empty values here: never the deck or another player's cards.

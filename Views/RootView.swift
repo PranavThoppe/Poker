@@ -6,6 +6,7 @@ struct RootView: View {
     var onExitClassic: (() -> Void)?
 
     @State private var isShowingLeaveConfirmation = false
+    @State private var isShowingSitOutAfterLeaveFailure = false
 
     private var canExitPractice: Bool {
         store.state.gameMode == .practiceVsCPU
@@ -64,15 +65,22 @@ struct RootView: View {
                 .buttonStyle(.plain)
                 .padding(.top, Theme.Spacing.xs)
                 .padding(.trailing, Theme.Spacing.sm)
-                .accessibilityLabel(canExitClassic ? "Sit out of game" : "Leave practice game")
+                .accessibilityLabel(canExitClassic ? (store.state.phase == .waiting ? "Leave waiting room" : "Sit out of game") : "Leave practice game")
             }
         }
-        .alert(canExitClassic ? "Sit out?" : "Leave this game?", isPresented: $isShowingLeaveConfirmation) {
+        .alert(canExitClassic ? (store.state.phase == .waiting ? "Leave waiting room?" : "Sit out?") : "Leave this game?", isPresented: $isShowingLeaveConfirmation) {
             Button("Stay", role: .cancel) {}
-            Button(canExitClassic ? "Sit Out" : "Leave", role: .destructive) {
+            Button(canExitClassic ? (store.state.phase == .waiting ? "Leave" : "Sit Out") : "Leave", role: .destructive) {
                 if canExitClassic {
-                    store.sitOutLocalPlayer()
-                    onExitClassic?()
+                    if store.state.phase == .waiting {
+                        store.leaveWaitingRoom { success in
+                            if success { onExitClassic?() }
+                            else if store.state.phase != .waiting { isShowingSitOutAfterLeaveFailure = true }
+                        }
+                    } else {
+                        store.sitOutLocalPlayer()
+                        onExitClassic?()
+                    }
                 } else {
                     store.resetToWaiting()
                     onExitPractice?()
@@ -80,8 +88,17 @@ struct RootView: View {
             }
         } message: {
             Text(canExitClassic
-                ? "Other players can continue. You can rejoin before a later hand."
+                ? (store.state.phase == .waiting ? "You will leave the waiting room. You can join again from the bubble." : "Other players can continue. You can rejoin before a later hand.")
                 : "Your current practice game will end.")
+        }
+        .alert("Sit out?", isPresented: $isShowingSitOutAfterLeaveFailure) {
+            Button("Stay", role: .cancel) {}
+            Button("Sit Out", role: .destructive) {
+                store.sitOutLocalPlayer()
+                onExitClassic?()
+            }
+        } message: {
+            Text("The game started before you left. Other players can continue, and you can rejoin before a later hand.")
         }
     }
 }

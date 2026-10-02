@@ -36,7 +36,7 @@ struct HandSummaryView: View {
 
     private var buttonTitle: String {
         if requiresReadyUp {
-            return isHeroReady ? "Cancel" : "Ready Up"
+            return isHeroReady ? "Cancel" : (store.canHeroRejoin ? "Rejoin & Ready" : "Ready Up")
         }
         return store.sessionEndsAfterHandSummary ? "See Final Results" : "Next Hand"
     }

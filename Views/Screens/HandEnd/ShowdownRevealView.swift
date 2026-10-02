@@ -15,7 +15,7 @@ struct ShowdownRevealView: View {
 
     private var isPractice: Bool { store.state.gameMode == .practiceVsCPU }
     private var canHeroContinue: Bool {
-        store.isHeroShowdownDecider || (isPractice && store.state.heroID != nil)
+        !store.isHeroSittingOut && (store.isHeroShowdownDecider || (isPractice && store.state.heroID != nil))
     }
 
     private var result: HandResult? { store.state.handResult }

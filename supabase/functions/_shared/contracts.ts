@@ -10,6 +10,7 @@ export type GameCommand =
   | { kind: "advanceSummary" }
   | { kind: "startNextHand" }
   | { kind: "setSittingOut"; sittingOut: boolean }
+  | { kind: "leaveRoom" }
   | { kind: "updateSettings"; startingStack: number; smallBlind: number }
   | { kind: "raiseBlinds"; smallBlind: number }
   | { kind: "endGame"; reason: string }
@@ -28,7 +29,7 @@ export interface RequestBody {
 }
 
 const operations = new Set(["create-room", "join-room", "room-state", "game-command"]);
-const commandKinds = new Set(["setReady", "startGame", "bet", "showCards", "advanceSummary", "startNextHand", "setSittingOut", "updateSettings", "raiseBlinds", "endGame", "resetRoom"]);
+const commandKinds = new Set(["setReady", "startGame", "bet", "showCards", "advanceSummary", "startNextHand", "setSittingOut", "leaveRoom", "updateSettings", "raiseBlinds", "endGame", "resetRoom"]);
 
 export function parseRequest(value: unknown): RequestBody | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -84,12 +85,14 @@ export function viewerState(publicState: JsonObject, privateState: JsonObject | 
   result.endStats ??= [];
   const cards = privateState?.holeCardsByPlayer;
   result.heroID = playerID;
-  result.heroHoleCards = cards && typeof cards === "object" && !Array.isArray(cards)
+  const phase = enumName(result.phase, "waiting");
+  const players = Array.isArray(result.players) ? result.players as JsonObject[] : [];
+  const hero = players.find(player => player.id === playerID);
+  const spectatingLiveHand = hero?.isSittingOut === true && ["playing", "showdown"].includes(phase);
+  result.heroHoleCards = !spectatingLiveHand && cards && typeof cards === "object" && !Array.isArray(cards)
     ? ((cards as JsonObject)[playerID] as Json[] | undefined) ?? [] : [];
   // These values depend on the viewing player. They cannot be calculated on
   // the shared room state, which deliberately has no heroID.
-  const players = Array.isArray(result.players) ? result.players as JsonObject[] : [];
-  const hero = players.find(player => player.id === playerID);
   const integer = (value: Json | undefined, fallback = 0) => typeof value === "number" && Number.isSafeInteger(value) ? value : fallback;
   const currentBet = integer(hero?.currentBet), streetBet = integer(result.streetBetLevel);
   const smallBlind = Math.max(1, integer(result.smallBlind, 5));

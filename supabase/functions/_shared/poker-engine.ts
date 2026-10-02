@@ -82,7 +82,12 @@ function go(pub:JsonObject,priv:JsonObject,id:string,c:GameCommand,f:()=>Card[])
   const p=getPlayer(s,id);
   switch(c.kind){
     case"setReady":
-      if(!["waiting","handSummary"].includes(s.phase)||!eligible(p))fail("actor_ineligible");
+      if(!["waiting","handSummary"].includes(s.phase))fail("actor_ineligible");
+      if(c.ready&&on(p.isSittingOut)){
+        if(on(p.isEliminated)||n(p.stack)<=0)fail("actor_ineligible");
+        p.isSittingOut=false;
+      }
+      if(c.ready&&!eligible(p))fail("actor_ineligible");
       p.isReady=c.ready;
       break;
     case"startGame":
@@ -103,6 +108,12 @@ function go(pub:JsonObject,priv:JsonObject,id:string,c:GameCommand,f:()=>Card[])
       break;
     case"setSittingOut":
       sit(s,r,id,c.sittingOut);
+      break;
+    case"leaveRoom":
+      if(s.phase!=="waiting")fail("illegal_phase");
+      s.players=ps(s).filter(x=>x.id!==id);
+      delete r.holeCardsByPlayer[id];
+      if(s.hostID===id) s.hostID=s.players[0]?.id??null;
       break;
     case"updateSettings":
       settings(s,id,c.startingStack,c.smallBlind);
@@ -785,6 +796,7 @@ function sit(s:S,r:PokerRuntime,id:string,v:boolean){
   if(on(player.isEliminated))fail("actor_ineligible");
   
   const currentPhase=s.phase;
+  if(v&&currentPhase==="waiting")fail("illegal_phase");
   if(!v&&!['waiting','handSummary'].includes(currentPhase))fail("illegal_phase");
   
   // If sitting out during active hand, fold the player

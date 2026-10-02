@@ -260,7 +260,7 @@ struct WaitingRoomView: View {
 
     private var bottomBar: some View {
         VStack(spacing: Theme.Spacing.md) {
-            if !store.isHeroSittingOut {
+            if !store.isHeroSittingOut || store.canHeroRejoin {
                 readyButton
             }
             if store.canStartGame {
@@ -280,7 +280,7 @@ struct WaitingRoomView: View {
                     ProgressView()
                         .tint(isHeroReady ? Theme.Color.secondary : Theme.Color.background)
                 } else {
-                    Text(isHeroReady ? "Cancel" : "Ready Up")
+                    Text(isHeroReady ? "Cancel" : (store.isHeroSittingOut ? "Rejoin & Ready" : "Ready Up"))
                         .font(Theme.Font.actionLabel)
                         .foregroundStyle(isHeroReady ? Theme.Color.secondary : Theme.Color.background)
                 }

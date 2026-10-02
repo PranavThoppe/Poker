@@ -10,13 +10,14 @@ class ApiError extends Error { constructor(readonly code: string, readonly statu
 const swiftCase = (v: unknown) => typeof v === "string" ? v : v && typeof v === "object" && !Array.isArray(v) ? Object.keys(v)[0] ?? "" : "";
 // Commands with engine checks that make applying them to fresh state safe.
 // Bets and settings still depend on the exact table state the player saw.
-const REBASE_KINDS = new Set(["setReady", "setSittingOut", "startGame"]), LOBBY_PHASES = ["waiting", "handSummary"], maxRebaseAttempts = 3, maxJoinAttempts = 3;
+const REBASE_KINDS = new Set(["setReady", "setSittingOut", "startGame", "leaveRoom"]), LOBBY_PHASES = ["waiting", "handSummary"], maxRebaseAttempts = 3, maxJoinAttempts = 3;
 // setSittingOut folds the player (and may advance the turn) mid-hand, so it is
 // only order-independent while the room is between hands.
 const canRebase = (room: any, command?: { kind?: string }) => {
   if (!command?.kind || !REBASE_KINDS.has(command.kind)) return false;
   const phase = swiftCase(room.public_state?.phase);
   if (command.kind === "setSittingOut") return LOBBY_PHASES.includes(phase);
+  if (command.kind === "leaveRoom") return phase === "waiting";
   if (command.kind === "startGame") return phase === "waiting";
   return true;
 };
@@ -66,13 +67,19 @@ export default { fetch: withSupabase({ auth: ["publishable", "secret"] }, async 
       for (let attempt = 1; attempt <= maxJoinAttempts; attempt++) {
         if (attempt > 1) room = await loadRoom();
         const state = structuredClone(room.public_state), players = Array.isArray(state.players) ? state.players : [], p = players.find((x: any) => x.id === body.playerID);
-        if (p) { p.name = body.playerName?.trim() || p.name; p.avatarIndex = Math.max(0, Math.floor(body.avatarIndex ?? p.avatarIndex ?? 0)); }
+        if (p) {
+          p.name = body.playerName?.trim() || p.name; p.avatarIndex = Math.max(0, Math.floor(body.avatarIndex ?? p.avatarIndex ?? 0));
+          if (swiftCase(state.phase) === "waiting" && p.isSittingOut === true) { p.isSittingOut = false; p.isReady = false; }
+        }
         else {
-          if (!["waiting", "handSummary"].includes(swiftCase(state.phase))) throw new ApiError("room_not_joinable", 409);
+          const phase = swiftCase(state.phase);
+          const spectatorJoin = phase === "playing" || phase === "showdown";
+          if (!["waiting", "handSummary"].includes(phase) && !spectatorJoin) throw new ApiError("room_not_joinable", 409);
           const stack = Number.isSafeInteger(state.startingStack) ? state.startingStack : 500;
-          players.push({ id: body.playerID, name: body.playerName?.trim() || "Player", stack, isReady: false, isDealer: false, isFolded: false, isEliminated: false, isSittingOut: false, currentBet: 0, avatarIndex: Math.max(0, Math.floor(body.avatarIndex ?? 0)), isBot: false });
+          players.push({ id: body.playerID, name: body.playerName?.trim() || "Player", stack, isReady: false, isDealer: false, isFolded: spectatorJoin, isEliminated: false, isSittingOut: spectatorJoin, currentBet: 0, avatarIndex: Math.max(0, Math.floor(body.avatarIndex ?? 0)), isBot: false });
         }
         state.players = players;
+        if (!players.some((x: any) => x.id === state.hostID)) state.hostID = body.playerID;
         state.stateVersion = Number(room.server_version) + 1;
         const receipt = { state: viewerState(state, room.private_state, body.playerID), deadlineAt: room.deadline_at };
         const { data, error: e } = await ctx.supabaseAdmin.rpc("commit_game_transition", {
@@ -100,10 +107,16 @@ export default { fetch: withSupabase({ auth: ["publishable", "secret"] }, async 
     // (bets, updateSettings, ...) keeps strict optimistic concurrency.
     for (let attempt = 1; ; attempt++) {
       const rebase = canRebase(room, body.command);
+      if (body.operation === "game-command" && body.command && body.actionID) {
+        const prior = Array.isArray(room.recent_command_receipts)
+          ? room.recent_command_receipts.find((x: any) => x?.action_id === body.actionID && x?.actor_device_id === body.playerID) : null;
+        if (prior?.response) return json(prior.response);
+      }
+      if (body.operation === "room-state" && !member(room, body.playerID)) throw new ApiError("not_room_member", 403);
+      if (body.operation === "game-command" && !member(room, body.playerID) && body.command?.kind !== "leaveRoom") throw new ApiError("not_room_member", 403);
       if (body.command?.kind === "startGame") {
         console.info("game-api startGame attempt", JSON.stringify({ actionID: body.actionID, roomID, attempt, phase: swiftCase(room.public_state?.phase), rebase, expectedVersion: body.expectedVersion, loadedServerVersion: room.server_version }));
       }
-      if (!member(room, body.playerID)) throw new ApiError("not_room_member", 403);
       // Deadline processing is an authoritative transition too. Persist it before
       // serving a snapshot or evaluating a player command so a sleeping client
       // cannot leave a reveal/payout stalled indefinitely.
@@ -127,10 +140,9 @@ export default { fetch: withSupabase({ auth: ["publishable", "secret"] }, async 
       if (!body.command || !body.actionID || body.expectedVersion === undefined || !UUID.test(body.actionID)) throw new ApiError("malformed_command");
       // Fast-path receipts before stale checks. This mirrors the RPC's ordering and
       // is necessary when a dropped response is retried after later room changes.
-      const prior = Array.isArray(room.recent_command_receipts)
-        ? room.recent_command_receipts.find((x: any) => x?.action_id === body.actionID) : null;
-      if (prior?.response) return json(prior.response);
-      if (!rebase && Number(body.expectedVersion) !== Number(room.server_version)) {
+      if (body.command.kind === "leaveRoom" && !member(room, body.playerID)) throw new ApiError("not_room_member", 403);
+      const rejectedLeavePhase = body.command.kind === "leaveRoom" && swiftCase(room.public_state?.phase) !== "waiting";
+      if (!rebase && !rejectedLeavePhase && Number(body.expectedVersion) !== Number(room.server_version)) {
         if (body.command.kind === "startGame") console.warn("game-api startGame stale version check", JSON.stringify({ actionID: body.actionID, roomID, phase: swiftCase(room.public_state?.phase), rebase, expectedVersion: body.expectedVersion, loadedServerVersion: room.server_version }));
         throw new ApiError("stale_state", 409);
       }
@@ -138,7 +150,7 @@ export default { fetch: withSupabase({ auth: ["publishable", "secret"] }, async 
       // crypto.randomUUID() uses lowercase. UUID matching is case-insensitive.
       const roomHandID = typeof room.public_state?.handID === "string" ? room.public_state.handID.toLowerCase() : null;
       const expectedHandID = typeof body.expectedHandID === "string" ? body.expectedHandID.toLowerCase() : null;
-      if (roomHandID !== expectedHandID) throw new ApiError("stale_hand", 409);
+      if (!rejectedLeavePhase && roomHandID !== expectedHandID) throw new ApiError("stale_hand", 409);
       let t; try { t = applyCommand(room.public_state, room.private_state ?? { remainingDeck: [], holeCardsByPlayer: {} }, body.playerID, body.command); } catch (e) { throw new ApiError(e instanceof Error ? e.message : "illegal_command", 409); }
       t.publicState.stateVersion = Number(room.server_version) + 1; const receipt = { state: viewerState(t.publicState, t.privateState, body.playerID), deadlineAt: t.deadlineAt };
       // For strict commands the check above guarantees this equals expectedVersion;

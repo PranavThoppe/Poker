@@ -13,6 +13,41 @@ const room = (): JsonObject => ({
   activePlayerID: null, completedHandCount: 0,
 });
 
+Deno.test("waiting-room leave removes the player and hands host authority to the next seat", () => {
+  const result = applyCommandWithDeck(room(), { remainingDeck: [], holeCardsByPlayer: { a: cards.slice(0, 2), b: cards.slice(2, 4) } },
+    "a", { kind: "leaveRoom" }, cards);
+  const next = result.publicState as Record<string, unknown>;
+  const seats = next.players as Array<Record<string, unknown>>;
+  if (seats.length !== 1 || seats[0].id !== "b" || next.hostID !== "b") throw new Error("host leave did not remove and hand off");
+  if ("a" in (result.privateState.holeCardsByPlayer as Record<string, unknown>)) throw new Error("leaver private cards retained");
+});
+
+Deno.test("last player can leave and waiting sit-out is rejected", () => {
+  const state = room();
+  state.players = [player("a")];
+  const result = applyCommandWithDeck(state, { remainingDeck: [], holeCardsByPlayer: {} }, "a", { kind: "leaveRoom" }, cards);
+  if ((result.publicState.players as unknown[]).length !== 0 || result.publicState.hostID !== null) throw new Error("empty room not preserved");
+  try {
+    applyCommandWithDeck(room(), { remainingDeck: [], holeCardsByPlayer: {} }, "a", { kind: "setSittingOut", sittingOut: true }, cards);
+    throw new Error("waiting sit-out accepted");
+  } catch (error) {
+    if (error instanceof Error && error.message === "waiting sit-out accepted") throw error;
+    if (!(error instanceof Error) || error.message !== "illegal_phase") throw error;
+  }
+});
+
+Deno.test("leave is rejected after the game starts", () => {
+  const state = room();
+  state.phase = { playing: {} };
+  try {
+    applyCommandWithDeck(state, { remainingDeck: [], holeCardsByPlayer: {} }, "a", { kind: "leaveRoom" }, cards);
+    throw new Error("in-game leave accepted");
+  } catch (error) {
+    if (error instanceof Error && error.message === "in-game leave accepted") throw error;
+    if (!(error instanceof Error) || error.message !== "illegal_phase") throw error;
+  }
+});
+
 Deno.test("heads-up deal posts button small blind and hides opponent cards", () => {
   const result = applyCommandWithDeck(
     room(), { remainingDeck: [], holeCardsByPlayer: {} }, "a", { kind: "startGame" }, cards,

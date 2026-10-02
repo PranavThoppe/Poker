@@ -10,6 +10,7 @@ enum GameCommand: Encodable, Equatable {
     case advanceSummary
     case startNextHand
     case setSittingOut(Bool)
+    case leaveRoom
     case updateSettings(startingStack: Int, smallBlind: Int)
     case raiseBlinds(Int)
     case endGame(GameEndReason)
@@ -26,6 +27,7 @@ enum GameCommand: Encodable, Equatable {
         case .advanceSummary: try c.encode("advanceSummary", forKey: .kind)
         case .startNextHand: try c.encode("startNextHand", forKey: .kind)
         case .setSittingOut(let value): try c.encode("setSittingOut", forKey: .kind); try c.encode(value, forKey: .sittingOut)
+        case .leaveRoom: try c.encode("leaveRoom", forKey: .kind)
         case .updateSettings(let startingStack, let smallBlind):
             try c.encode("updateSettings", forKey: .kind)
             try c.encode(startingStack, forKey: .startingStack)

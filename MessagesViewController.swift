@@ -154,7 +154,9 @@ class MessagesViewController: MSMessagesAppViewController {
                 self.requestPresentationStyle(.expanded)
             } catch {
                 self.extensionHost.route = .gameSelection
-                self.presentGameConnectionError(error)
+                self.presentGameConnectionError(error) { [weak self] in
+                    self?.openGame(from: url, conversation: conversation)
+                }
             }
         }
     }
@@ -217,14 +219,28 @@ class MessagesViewController: MSMessagesAppViewController {
         }
     }
 
-    private func presentGameConnectionError(_ error: Error) {
-        let detail = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+    private func presentGameConnectionError(_ error: Error, retry: (() -> Void)? = nil) {
+        let code = (error as? GameAPIClientError).flatMap { apiError -> String? in
+            guard case let .server(_, code, _) = apiError else { return nil }
+            return code
+        }
+        let detail: String
+        if code == "room_not_joinable" {
+            detail = "The room can’t be joined in its current phase. Retry in case its phase has changed; during a hand, you can join as a spectator."
+        } else {
+            detail = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
         let alert = UIAlertController(
-            title: "Couldn’t start Classic Poker",
-            message: "Please try again in a moment.\n\n\(detail)",
+            title: "Couldn’t open Classic Poker",
+            message: "\(detail)",
             preferredStyle: .alert
         )
-        alert.addAction(UIAlertAction(title: "OK", style: .default))
+        if let retry {
+            alert.addAction(UIAlertAction(title: "Retry", style: .default) { _ in retry() })
+            alert.addAction(UIAlertAction(title: "Close", style: .cancel))
+        } else {
+            alert.addAction(UIAlertAction(title: "OK", style: .default))
+        }
         present(alert, animated: true)
     }
 

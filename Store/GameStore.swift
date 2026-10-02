@@ -44,10 +44,6 @@ final class GameStore: ObservableObject {
     private var lastHandledLobbySettingsAnnouncementID: UUID?
     private var hasReceivedInitialRoomState = false
     private var lastShowdownTimeoutID: String?
-    /// Reopening a room is an intent to return. During a live hand the intent stays local
-    /// until the safe `.handSummary` boundary, then writes one normal roster update.
-    private var shouldRequestRejoinOnRemoteState = false
-    private var pendingRejoinHandID: UUID?
     /// Consecutive watchdog ticks with nobody on the clock.
     private var stalledPollTicks = 0
 
@@ -284,6 +280,12 @@ final class GameStore: ObservableObject {
         return state.players.first(where: { $0.id == heroID })?.isSittingOut ?? false
     }
 
+    var canHeroRejoin: Bool {
+        guard let heroID = state.heroID,
+              let hero = state.players.first(where: { $0.id == heroID }) else { return false }
+        return hero.isSittingOut && !hero.isEliminated && hero.stack > 0
+    }
+
     /// The X action for an unfinished Classic room. This is intentionally available only to
     /// an active, non-eliminated local player; elimination remains permanent.
     func sitOutLocalPlayer() {
@@ -314,12 +316,9 @@ final class GameStore: ObservableObject {
         }
     }
 
-    /// Called when this device opens an existing Classic room. A sitting-out player returns
-    /// at a summary/waiting boundary, or spectates the hand already underway.
-    func requestRejoinAfterReopening() {
-        guard state.gameMode == .classicPoker else { return }
-        shouldRequestRejoinOnRemoteState = true
-        reconcileLocalParticipation()
+    func leaveWaitingRoom(completion: @escaping (Bool) -> Void) {
+        guard state.gameMode == .classicPoker else { completion(false); return }
+        submit(.leaveRoom, completion: completion)
     }
 
     /// Stops only this extension's polling and local scheduled work. It never writes a room
@@ -572,7 +571,6 @@ final class GameStore: ObservableObject {
             guard let self else { return }
 
             self.mergeRemoteState(remoteState, remoteHostID: remoteHostID)
-            self.reconcileLocalParticipation()
 
             if self.isHost,
                self.state.phase == .playing,
@@ -621,10 +619,41 @@ final class GameStore: ObservableObject {
                 completion?(true)
             } catch {
                 if Self.isStaleCommandError(error) {
-                    // A response from another room write won the race. Refresh first;
-                    // only startGame is retried below, after its lobby checks pass.
+                    // A response from another room write won the race. Refresh first,
+                    // then retry only commands whose meaning is safe on current state.
                     await self.refreshClassicState(roomID: roomID, playerID: heroID)
-                    if case .startGame = command, self.state.phase == .waiting {
+                    if case .leaveRoom = command {
+                        self.retryableClassicCommand = nil
+                        self.multiplayerError = "Couldn't leave the waiting room because it changed."
+                        completion?(false)
+                    } else if case .setReady = command {
+                        if self.state.phase == .waiting || self.state.phase == .handSummary {
+                            do {
+                                let retry = try await GameCommandClient.shared.submit(
+                                    roomID: roomID,
+                                    playerID: heroID,
+                                    version: self.state.version,
+                                    handID: self.state.handID,
+                                    command: command,
+                                    actionID: actionID
+                                )
+                                if let next = retry.state {
+                                    self.mergeServerState(next, serverVersion: retry.serverVersion)
+                                }
+                                self.retryableClassicCommand = nil
+                                completion?(true)
+                            } catch {
+                                await self.refreshClassicState(roomID: roomID, playerID: heroID)
+                                self.retryableClassicCommand = (command, actionID)
+                                self.multiplayerError = "Couldn't update Ready Up. Your room status was refreshed; try again."
+                                completion?(false)
+                            }
+                        } else {
+                            self.retryableClassicCommand = nil
+                            self.multiplayerError = "Ready Up is available only between hands."
+                            completion?(false)
+                        }
+                    } else if case .startGame = command, self.state.phase == .waiting {
                         if self.state.version > version, self.canStartGame {
                             do {
                                 let retry = try await GameCommandClient.shared.submit(
@@ -666,6 +695,22 @@ final class GameStore: ObservableObject {
                         completion?(true)
                     }
                 } else {
+                    if case .leaveRoom = command {
+                        if let apiError = error as? GameAPIClientError,
+                           case let .server(_, code, _) = apiError, code == "not_room_member" {
+                            self.retryableClassicCommand = nil
+                            completion?(true)
+                            self.isSubmittingCommand = false
+                            self.submittingCommand = nil
+                            return
+                        }
+                        self.retryableClassicCommand = nil
+                        self.multiplayerError = "Couldn't leave the waiting room: \(error.localizedDescription)"
+                        completion?(false)
+                        self.isSubmittingCommand = false
+                        self.submittingCommand = nil
+                        return
+                    }
                     self.retryableClassicCommand = (command, actionID)
                     self.multiplayerError = error.localizedDescription
                     completion?(false)
@@ -816,7 +861,6 @@ final class GameStore: ObservableObject {
         markHandCompletedIfNeeded(previousPhase: previousPhase)
         resetReadyStateForHandSummary()
         state.phase = .handSummary
-        reconcileLocalParticipation()
         GameLog.phaseChanged(from: previousPhase, to: .handSummary, state: state)
         GameLog.handSummaryOpened(state: state)
     }
@@ -903,7 +947,6 @@ final class GameStore: ObservableObject {
         markHandCompletedIfNeeded(previousPhase: previousPhase)
         resetReadyStateForHandSummary()
         state.phase = .handSummary
-        reconcileLocalParticipation()
         GameLog.phaseChanged(from: previousPhase, to: .handSummary, state: state)
         GameLog.handSummaryOpened(state: state)
     }
@@ -912,47 +955,6 @@ final class GameStore: ObservableObject {
         guard state.gameMode == .classicPoker else { return }
         for index in state.players.indices {
             state.players[index].isReady = false
-        }
-    }
-
-    /// Applies a local reopen request once the room reaches a hand boundary. Repeated poll
-    /// updates are harmless: after activation both intent markers are cleared.
-    private func reconcileLocalParticipation() {
-        guard state.gameMode == .classicPoker,
-              let heroID = state.heroID,
-              let index = state.players.firstIndex(where: { $0.id == heroID }),
-              !state.players[index].isEliminated else {
-            shouldRequestRejoinOnRemoteState = false
-            pendingRejoinHandID = nil
-            return
-        }
-
-        let wantsToRejoin = shouldRequestRejoinOnRemoteState || pendingRejoinHandID != nil
-        guard wantsToRejoin, state.players[index].isSittingOut else {
-            // Before the first poll our temporary join record says "not sitting out".
-            // Keep the reopen intent until the authoritative roster has arrived.
-            if hasReceivedInitialRoomState && !state.players[index].isSittingOut {
-                shouldRequestRejoinOnRemoteState = false
-                pendingRejoinHandID = nil
-            }
-            return
-        }
-
-        switch state.phase {
-        case .waiting, .handSummary:
-            state.players[index].isSittingOut = false
-            state.players[index].isReady = false
-            state.heroHoleCards = []
-            state.heroHandRank = nil
-            shouldRequestRejoinOnRemoteState = false
-            pendingRejoinHandID = nil
-        case .playing, .showdown:
-            pendingRejoinHandID = state.handID
-            shouldRequestRejoinOnRemoteState = false
-            state.heroHoleCards = []
-            state.heroHandRank = nil
-        case .ended:
-            break
         }
     }
 
@@ -1163,6 +1165,12 @@ final class GameStore: ObservableObject {
         // still in flight. Never let that older snapshot resurrect a previous
         // turn or its call amount.
         guard remote.version >= state.version else { return }
+        if let viewerID = remote.heroID,
+           (remote.phase == .playing || remote.phase == .showdown),
+           remote.players.first(where: { $0.id == viewerID })?.isSittingOut == true {
+            remote.heroHoleCards = []
+            remote.heroHandRank = nil
+        }
         if remote.hostID == nil {
             remote.hostID = remoteHostID
         }

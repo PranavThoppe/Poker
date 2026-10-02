@@ -12,7 +12,7 @@ Classic uses the existing CPU-mode small, high, circular **X** treatment. At a c
 
 ### X action in Classic
 
-Tapping X during an unfinished Classic game presents a confirmation:
+Tapping X in the waiting room presents a **Leave waiting room?** confirmation. Confirming removes the player from the roster, then closes the extension; reopening the bubble joins as a fresh, unready player. Once the first hand starts, X presents the existing sit-out confirmation:
 
 | Element | Required copy / behavior |
 |---|---|
@@ -48,15 +48,15 @@ If fewer than two players are both non-eliminated and not sitting out, the table
 
 ### Reopening and rejoining
 
-A player who had been sitting out may reopen the game. The timing determines when they become active:
+A player who had been sitting out may reopen the game. Reopening alone never changes their participation; **Ready Up** at a safe boundary is the explicit rejoin action:
 
 | Shared phase when reopened | Required behavior |
 |---|---|
 | `.playing` or `.showdown` | Keep the player sitting out for the entire current hand. Present the game as a spectator: shared board, public player states, pot, and progression are visible, but no private hole cards are fetched or displayed. They cannot bet, fold, reveal, continue, or Ready Up. |
-| `.handSummary` | Reactivate immediately with `isReady = false`; show **Ready Up** for the next hand. |
-| `.waiting` | Reactivate immediately with `isReady = false`; show **Ready Up**. |
+| `.handSummary` | Keep the player sitting out and unready until they tap **Rejoin & Ready**. That server command clears `isSittingOut` and sets `isReady = true` atomically. |
+| `.waiting` | Keep the player sitting out and unready until they tap **Rejoin & Ready**, which reactivates and readies them in one server command. |
 
-For a mid-hand spectator, automatically reactivate the player when the game reaches `.handSummary`, setting `isReady = false`. Rejoining always requires an explicit **Ready Up** before the next hand. A player eliminated by normal poker play remains eliminated; sitting out is not a path to re-enter after elimination.
+If the player returns during a live hand, keep them spectating through `.handSummary`; show **Rejoin & Ready** only at the safe boundary. `setReady(false)` never reactivates a player. A player eliminated by normal poker play remains eliminated; sitting out is not a path to re-enter after elimination.
 
 The presentation must clearly label the local hero as a spectator/sitting out while that status applies. The UI must not expose actions that are invalid for that state.
 
@@ -76,8 +76,7 @@ Provide store-level operations for the following responsibilities:
 | Operation | Requirements |
 |---|---|
 | Sit out local player | Persist `isSittingOut = true`; if the hand is live and the local player is participating, perform the immediate fold first/atomically with the transition so only one fold is recorded. |
-| Request rejoin after reopening | Resolve the local player and determine whether reactivation is safe now or must wait for the current hand summary. |
-| Activate returning player | At `.waiting` or `.handSummary`, set `isSittingOut = false` and `isReady = false`; never activate them into the current live hand. |
+| Rejoin and ready | At `.waiting` or `.handSummary`, `setReady(true)` atomically clears `isSittingOut` and sets `isReady = true` for a non-eliminated player with chips. |
 | Close local Classic session | Stop the local multiplayer subscription and related local tasks without writing a game-ending or roster-changing mutation. |
 
 Update the eligibility helpers or equivalent central engine/store predicates. They must independently express at least:
@@ -110,11 +109,10 @@ Private-card fetch and retry logic must explicitly recognize the spectator/sitti
 active seated player
   └─ confirms Sit Out ──► sitting out
                             ├─ live hand: fold immediately, then spectate through summary
-                            ├─ waiting/summary reopening: reactivate now, unready
-                            └─ live reopening: remain spectator; reactivate at summary, unready
+                            └─ reopen: remain sitting out until Rejoin & Ready at waiting/summary
 
 sitting out + fewer than 2 active eligible players
-  └─ post-hand pause ──► another player rejoins + becomes ready ──► next hand may deal
+  └─ post-hand pause ──► another player taps Rejoin & Ready ──► next hand may deal
 ```
 
 ## Acceptance scenarios
@@ -123,12 +121,12 @@ sitting out + fewer than 2 active eligible players
 |---|---|
 | Guest sits out at hand summary | Guest stays seated with all data intact. The remaining active players can Ready Up and play subsequent hands without the guest. |
 | Guest sits out on their turn | The guest hand folds once, no further action is requested from them, and play advances normally. |
-| Guest reopens mid-hand | Guest sees public game state only, no hole cards or actionable controls. At hand summary, they reactivate unready and then receive Ready Up. |
-| Guest reopens at hand summary | Guest reactivates immediately, remains unready, and can use Ready Up. |
+| Guest reopens mid-hand | Guest sees public game state only, no hole cards or actionable controls. They remain sitting out through hand summary, where Rejoin & Ready appears. |
+| Guest reopens at hand summary | Guest remains sitting out and unready until tapping Rejoin & Ready; one server transition reactivates and readies them. |
 | Only one active player remains | The table pauses after the current hand; it neither deals a one-player hand nor ends solely due to sitting-out players. It resumes only after another seated player rejoins and is ready. |
 | Host and guest sit out/rejoin | Both flows preserve stacks, dealer order, pots, roster data, and shared state without corruption. |
 | Existing CPU X / Leave / Done behavior | Remains unchanged. Classic alone maps its unfinished-game X confirmation to Sit Out; completed Classic Done remains local-only. |
 
 ## Verification notes
 
-Test host and guest independently, including state changes made immediately before the host attempts to start/deal a new hand. Exercise reconnect/reopen flows in every listed phase, and inspect logs/synced state to confirm `isSittingOut` survives every merge and that no private-card retry occurs for a spectator.
+Test host and guest independently, including state changes made immediately before the host attempts to start/deal a new hand. Exercise reconnect/reopen flows in every listed phase, confirm Ready Up is absent during `.playing` and `.showdown`, and inspect synced state to confirm reactivation happens only with `setReady(true)`. Verify a spectator snapshot contains no hero hole cards and no private-card retry occurs.

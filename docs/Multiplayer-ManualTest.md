@@ -15,6 +15,8 @@ Run a Debug build on two devices or simulators with different device IDs. Use De
 | 7 | Device B tries to start the game before A does. | Start Game remains available only to the host. |
 | 8 | Inspect private cards. | Each device sees only its own two cards. |
 
+Also verify that a room with only one eligible player cannot start Classic Poker, even if that player is host and ready. The UI must not enable Start Game, and a direct server `startGame` command must be rejected.
+
 Race two valid settings saves from A and B as closely together as possible. One save should win; the other device refreshes and closes its settings popover without a conflict message. Both devices converge on the winner's values and show the winner's green confirmation.
 
 ## Waiting-room leave

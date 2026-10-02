@@ -223,9 +223,7 @@ final class GameStore: ObservableObject {
 
     var canStartGame: Bool {
         allReady
-            && (state.gameMode != .classicPoker || isHost)
-            // Preserve the legacy solo Classic lobby, but do not deal a one-player hand
-            // after other seated players chose to sit out.
+            && (state.gameMode != .classicPoker || (isHost && eligiblePlayerCountForNextHand >= 2))
             && (!state.players.contains(where: \.isSittingOut) || eligiblePlayerCountForNextHand >= 2)
     }
 

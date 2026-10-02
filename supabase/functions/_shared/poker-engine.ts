@@ -272,8 +272,8 @@ function start(s:S,r:PokerRuntime,id:string,f:()=>Card[]){
   if(s.hostID&&s.hostID!==id)fail("not_host");
   
   const eligiblePlayers=ps(s).filter(eligible);
-  if(!eligiblePlayers.length||!eligiblePlayers.every(p=>on(p.isReady)))fail("not_all_ready");
-  if(eligiblePlayers.length<2&&ps(s).some(p=>on(p.isSittingOut)))fail("insufficient_players");
+  if(eligiblePlayers.length<2)fail("insufficient_players");
+  if(!eligiblePlayers.every(p=>on(p.isReady)))fail("not_all_ready");
   
   // Initialize player state for new hand
   ps(s).forEach(p=>{

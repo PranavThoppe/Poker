@@ -44,7 +44,7 @@ They remain in the roster for identity, stack, statistics, history, and table pr
 
 The engine must distinguish a player who is eliminated from a player who is temporarily sitting out.
 
-If fewer than two players are both non-eliminated and not sitting out, the table pauses in its post-hand state. It must neither deal a one-player hand nor declare the game over solely because other seated players are sitting out. The table may resume after another seated, non-eliminated player rejoins and is ready for a subsequent hand.
+Classic Poker requires at least two eligible players to start. If fewer than two players are both non-eliminated and not sitting out at a hand boundary, the table pauses in its post-hand state. It must neither deal a one-player hand nor declare the game over solely because other seated players are sitting out. The table may resume after another seated, non-eliminated player rejoins and is ready for a subsequent hand.
 
 ### Reopening and rejoining
 

@@ -324,8 +324,11 @@ function start(s:S,r:PokerRuntime,id:string,f:()=>Card[]){
   
   first(s,true);
   
-  // If no active player (all all-in), resolve immediately
-  if(!s.activePlayerID)resolve(s,r);
+  // If nobody can bet (everyone all-in, or the lone player with chips is already matched), run it out
+  if(!s.activePlayerID||closed(s)){
+    s.activePlayerID=null;
+    resolve(s,r);
+  }
 }
 function draw(r:PokerRuntime){
   return r.remainingDeck.shift()??null;
@@ -344,12 +347,23 @@ function cap(s:S,id:string){
   
   return otherPlayerChips.length?Math.min(myTotalChips,Math.max(...otherPlayerChips)):myTotalChips;
 }
+/**
+ * True when no further betting is possible this street: nobody can put chips in, or the
+ * only player who can has already matched the bet (so nobody is left to respond to them).
+ * A lone player with chips who still owes a call is NOT closed - they must act.
+ */
+function closed(s:S):boolean{
+  const actors=ps(s).filter(p=>inHand(p)&&live(p));
+  if(!actors.length)return true;
+  return actors.length===1&&n(actors[0].currentBet)>=n(s.streetBetLevel);
+}
 function done(s:S){
   const playersInHand=ps(s).filter(inHand);
-  const eligiblePlayers=ps(s).filter(eligible);
   
-  // Hand is over if only one player left or only one player not eliminated
-  if(playersInHand.length<=1||eligiblePlayers.length===1)return true;
+  // Hand is over if only one player is left in it. An all-in player must not count as
+  // "gone": their opponents still get to call or fold before the round closes.
+  if(playersInHand.length<=1)return true;
+  if(closed(s))return true;
   
   const liveActors=playersInHand.filter(live);
   const actedSet=new Set(s.actedThisStreet??[]);
@@ -451,7 +465,7 @@ function action(s:S,r:PokerRuntime,id:string,k:string,amount?:number){
     // Move to next active player
     const nextPlayerIndex=scan(s,playerIndex,live);
     s.activePlayerID=nextPlayerIndex===null?null:ps(s)[nextPlayerIndex].id;
-    if(!s.activePlayerID&&!ps(s).some(live))resolve(s,r);
+    if(!s.activePlayerID&&closed(s))resolve(s,r);
   }
 }
 function resolve(s:S,r:PokerRuntime){
@@ -486,8 +500,12 @@ function resolve(s:S,r:PokerRuntime){
   
   first(s,false);
   
-  // If no live players remain, continue to next street
-  if(!ps(s).some(live))resolve(s,r);
+  // If nobody can bet on this street (e.g. a covering player was refunded their uncalled
+  // chips and the opponent is all-in), keep dealing instead of prompting a lone player.
+  if(closed(s)){
+    s.activePlayerID=null;
+    resolve(s,r);
+  }
 }
 function uncalled(s:S){
   const contributions=s.contributions??={};
@@ -722,6 +740,9 @@ function begin(s:S){
 }
 function bestCards(c:Card[],want:number[]){for(const combo of combos5(c)){if(cmp(five(combo),want)===0)return combo}return c.slice(0,5)}
 function show(s:S,r:PokerRuntime,id:string){
+  // A retried or late Show after the server already revealed this player (e.g. its own
+  // timeout) is a harmless no-op rather than an error.
+  if(s.phase==="showdown"&&(s.handResult?.reveals??[]).some((x:any)=>x.playerID===id))return;
   if(s.phase!=="showdown"||s.pendingRevealPlayerID!==id)fail("not_your_reveal");
   
   const holeCards=r.holeCardsByPlayer[id];

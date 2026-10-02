@@ -203,3 +203,79 @@ Deno.test("reset removes sitting-out seats and rejects reset before a game ends"
   catch (error) { rejected = error instanceof Error && error.message === "illegal_phase"; }
   if (!rejected) throw new Error("reset was accepted before game end");
 });
+
+// --- All-in regression tests -------------------------------------------------
+type Seat = Record<string, unknown>;
+function allInTable(stacks: number[]) {
+  const ids = ["a", "b", "c"].slice(0, stacks.length);
+  let pub: JsonObject = {
+    hostID: "a", phase: { waiting: {} }, players: ids.map((id, i) => player(id, stacks[i])),
+    board: [null, null, null, null, null], pot: 0, bettingRound: { preFlop: {} },
+    activePlayerID: null, completedHandCount: 0,
+  };
+  let priv: JsonObject = { remainingDeck: [], holeCardsByPlayer: {} };
+  const total = () => (pub.players as Seat[]).reduce((t, p) => t + (p.stack as number), 0) + (pub.pot as number);
+  const send = (id: string | null, command: Parameters<typeof applyCommandWithDeck>[3]) => {
+    const who = id ?? (pub.activePlayerID as string);
+    const result = applyCommandWithDeck(pub, priv, who, command, cards);
+    pub = result.publicState; priv = result.privateState;
+    if (pub.handResult && (pub.handResult as Record<string, unknown>).payoutsApplied) return;
+    if (total() !== stacks.reduce((a, b) => a + b, 0)) throw new Error(`chips not conserved: ${total()}`);
+  };
+  const seat = (id: string) => (pub.players as Seat[]).find((p) => p.id === id)!;
+  const round = () => Object.keys(pub.bettingRound as object)[0];
+  const phase = () => Object.keys(pub.phase as object)[0];
+  return { send, seat, round, phase, get active() { return pub.activePlayerID as string | null; }, get pub() { return pub; } };
+}
+
+Deno.test("heads-up shove waits for the opponent instead of closing the street", () => {
+  const t = allInTable([500, 500]);
+  t.send("a", { kind: "startGame" });
+  t.send(null, { kind: "bet", betKind: "raise", amount: 500 });
+  if (t.round() !== "preFlop" || t.active !== "b") throw new Error(`shove closed early: ${t.round()} active=${t.active}`);
+  if (t.seat("a").stack !== 0) throw new Error("shover stack should be 0");
+  t.send(null, { kind: "bet", betKind: "call", amount: 490 });
+  if (t.phase() !== "showdown") throw new Error(`call should run out the board, got ${t.phase()}`);
+});
+
+Deno.test("heads-up shove can be folded to", () => {
+  const t = allInTable([500, 500]);
+  t.send("a", { kind: "startGame" });
+  t.send(null, { kind: "bet", betKind: "raise", amount: 500 });
+  t.send(null, { kind: "bet", betKind: "fold" });
+  if (t.phase() !== "handSummary") throw new Error(`expected handSummary, got ${t.phase()}`);
+  if (t.seat("a").stack !== 510) throw new Error(`shover should win 510, has ${t.seat("a").stack}`);
+});
+
+Deno.test("covering player is not prompted after a short all-in call", () => {
+  const t = allInTable([500, 200]);
+  t.send("a", { kind: "startGame" });
+  t.send(null, { kind: "bet", betKind: "raise", amount: 200 });
+  t.send(null, { kind: "bet", betKind: "call", amount: 195 });
+  if (t.phase() !== "showdown") throw new Error(`should run out to showdown, got ${t.phase()} active=${t.active}`);
+});
+
+Deno.test("third player still answers a shove after a short stack calls all-in", () => {
+  const t = allInTable([500, 100, 500]);
+  t.send("a", { kind: "startGame" });
+  t.send(null, { kind: "bet", betKind: "raise", amount: 500 });
+  t.send(null, { kind: "bet", betKind: "call", amount: 500 });
+  if (t.round() !== "preFlop" || t.active !== "c") throw new Error(`c must respond to the shove: ${t.round()} active=${t.active}`);
+  t.send(null, { kind: "bet", betKind: "call", amount: 490 });
+  if (t.phase() !== "showdown") throw new Error(`expected showdown, got ${t.phase()}`);
+});
+
+Deno.test("a repeated Show from an already-revealed player is a harmless no-op", () => {
+  const start = applyCommandWithDeck(room(), { remainingDeck: [], holeCardsByPlayer: {} }, "a", { kind: "startGame" }, cards);
+  let pub = start.publicState, priv = start.privateState;
+  const step = (id: string, command: Parameters<typeof applyCommandWithDeck>[3]) => {
+    const r = applyCommandWithDeck(pub, priv, id, command, cards); pub = r.publicState; priv = r.privateState;
+  };
+  step("a", { kind: "bet", betKind: "raise", amount: 500 });
+  step("b", { kind: "bet", betKind: "call", amount: 490 });
+  const first = (pub.pendingRevealPlayerID as string);
+  step(first, { kind: "showCards" });
+  const count = ((pub.handResult as Record<string, unknown>).reveals as unknown[]).length;
+  step(first, { kind: "showCards" });
+  if (((pub.handResult as Record<string, unknown>).reveals as unknown[]).length !== count) throw new Error("duplicate reveal recorded");
+});

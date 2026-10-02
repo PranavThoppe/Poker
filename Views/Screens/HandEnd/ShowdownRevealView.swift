@@ -84,6 +84,15 @@ struct ShowdownRevealView: View {
 
                 Spacer()
 
+                if let error = store.multiplayerError {
+                    Text(error)
+                        .font(Theme.Font.caption)
+                        .foregroundStyle(Theme.Color.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, Theme.Spacing.md)
+                        .padding(.bottom, Theme.Spacing.xs)
+                }
+
                 showdownAction
                     .padding(.horizontal, Theme.Spacing.md)
 

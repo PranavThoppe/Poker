@@ -86,6 +86,9 @@ struct SupabaseClient {
         request.httpMethod = "POST"
         applyHeaders(to: &request, contentType: true)
         request.httpBody = try encoder.encode(body)
+        // A hung request would keep the store's single in-flight command slot busy and
+        // silently swallow every later tap, so fail fast and let the retry loop run.
+        request.timeoutInterval = 15
         // A Function can take a moment to resume after being idle. Retrying only
         // transport and temporary-server failures keeps the UI responsive without
         // hiding authentication or validation errors. Game room creation and

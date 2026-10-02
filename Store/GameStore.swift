@@ -651,6 +651,36 @@ final class GameStore: ObservableObject {
                             self.multiplayerError = "Ready Up is available only between hands."
                             completion?(false)
                         }
+                    } else if case .showCards = command {
+                        // The reveal is only meaningful while it is still our turn to show.
+                        // If the server already moved on (its own timeout revealed us), the
+                        // refresh above is all that was needed; otherwise resend once on the
+                        // fresh version so a stale tap is never silently lost.
+                        if self.state.phase == .showdown,
+                           self.state.pendingRevealPlayerID == heroID {
+                            do {
+                                let retry = try await GameCommandClient.shared.submit(
+                                    roomID: roomID,
+                                    playerID: heroID,
+                                    version: self.state.version,
+                                    handID: self.state.handID,
+                                    command: command,
+                                    actionID: actionID
+                                )
+                                if let next = retry.state {
+                                    self.mergeServerState(next, serverVersion: retry.serverVersion)
+                                }
+                                self.retryableClassicCommand = nil
+                                completion?(true)
+                            } catch {
+                                await self.refreshClassicState(roomID: roomID, playerID: heroID)
+                                self.multiplayerError = "Couldn't show your cards. Tap Show to try again."
+                                completion?(false)
+                            }
+                        } else {
+                            self.retryableClassicCommand = nil
+                            completion?(true)
+                        }
                     } else if case .startGame = command, self.state.phase == .waiting {
                         if self.state.version > version, self.canStartGame {
                             do {
@@ -709,9 +739,18 @@ final class GameStore: ObservableObject {
                         self.submittingCommand = nil
                         return
                     }
-                    self.retryableClassicCommand = (command, actionID)
-                    self.multiplayerError = error.localizedDescription
-                    completion?(false)
+                    if case .showCards = command,
+                       let apiError = error as? GameAPIClientError,
+                       case let .server(_, code, _) = apiError, code == "not_your_reveal" {
+                        // Someone else's turn, or we were already revealed: just resync.
+                        await self.refreshClassicState(roomID: roomID, playerID: heroID)
+                        self.retryableClassicCommand = nil
+                        completion?(true)
+                    } else {
+                        self.retryableClassicCommand = (command, actionID)
+                        self.multiplayerError = error.localizedDescription
+                        completion?(false)
+                    }
                 }
             }
             self.isSubmittingCommand = false

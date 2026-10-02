@@ -10,7 +10,9 @@ class ApiError extends Error { constructor(readonly code: string, readonly statu
 const swiftCase = (v: unknown) => typeof v === "string" ? v : v && typeof v === "object" && !Array.isArray(v) ? Object.keys(v)[0] ?? "" : "";
 // Commands with engine checks that make applying them to fresh state safe.
 // Bets and settings still depend on the exact table state the player saw.
-const REBASE_KINDS = new Set(["setReady", "setSittingOut", "startGame", "leaveRoom"]), LOBBY_PHASES = ["waiting", "handSummary"], maxRebaseAttempts = 3, maxJoinAttempts = 3;
+// showCards is safe to rebase: the engine only accepts it from the player whose reveal is
+// pending, and ignores a repeat from a player who has already shown.
+const REBASE_KINDS = new Set(["setReady", "setSittingOut", "startGame", "leaveRoom", "showCards"]), LOBBY_PHASES = ["waiting", "handSummary"], maxRebaseAttempts = 3, maxJoinAttempts = 3;
 // setSittingOut folds the player (and may advance the turn) mid-hand, so it is
 // only order-independent while the room is between hands.
 const canRebase = (room: any, command?: { kind?: string }) => {
@@ -19,6 +21,7 @@ const canRebase = (room: any, command?: { kind?: string }) => {
   if (command.kind === "setSittingOut") return LOBBY_PHASES.includes(phase);
   if (command.kind === "leaveRoom") return phase === "waiting";
   if (command.kind === "startGame") return phase === "waiting";
+  if (command.kind === "showCards") return phase === "showdown";
   return true;
 };
 const member = (room: any, id: string) => Array.isArray(room.public_state?.players) && room.public_state.players.some((p: any) => p.id === id);

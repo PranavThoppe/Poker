@@ -31,7 +31,7 @@ The client code and checked-in SQL identify these six active tables:
 | `game_rooms` | Essential | The server-authoritative room snapshot. `public_state` is viewer-safe; `private_state`, `deadline_at`, `server_version`, bounded command receipts, and bounded security telemetry are Function-only fields. `host_id` is immutable creator metadata only. | Multiplayer join, Function state reads, and state transitions stop working. |
 | `player_hole_cards` | Legacy during rollout | Old per-player-card store. New rooms retain all cards inside Function-only `game_rooms.private_state`. Client roles have no privileges on this table. | Only pre-cutover clients/rooms depend on it. |
 | `game_intents` | Legacy during rollout | The old host-claimed queue. Synchronous Edge Function commands supersede it. | Only pre-cutover clients/rooms depend on it. |
-| `game_win_credits` | Supporting / optional feature | Idempotency ledger for lifetime-win counting: one row per `(game_id, player_id)`. | The lifetime-wins display can double-count on retries unless this feature and its RPC are removed or redesigned. Core poker gameplay still works. |
+| `game_win_credits` | Supporting / optional feature | Server-side idempotency ledger for lifetime-win counting: one row per `(game_id, player_id)`, written with the authoritative game-end transition. | Lifetime wins can double-count on retries unless the ledger and transactional commit logic are retained. Core poker gameplay still works. |
 | `hand_played_credits` | Supporting profile-stat feature | Idempotency ledger for lifetime hands played: one row per `(hand_id, player_id)`, including `game_mode`. | The lifetime-hands count can double-count on retries unless this feature and its RPC are removed or redesigned. Core poker gameplay still works. |
 
 ## Recommended organization
@@ -39,7 +39,7 @@ The client code and checked-in SQL identify these six active tables:
 Keep the four multiplayer tables. Keep `game_win_credits` if the lifetime-win
 number on the game-selection screen is a product feature; it is good data
 integrity design, not clutter. If lifetime wins are not needed, remove the
-feature deliberately as a small unit: the table, `credit_game_win` RPC,
+feature deliberately as a small unit: the table, authoritative game transition,
 `profiles.lifetime_wins`, and the client-side win-stat service/UI.
 
 The important cleanup is likely **not** consolidation. These tables have

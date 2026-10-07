@@ -44,6 +44,7 @@ final class GameStore: ObservableObject {
     private var lastHandledLobbySettingsAnnouncementID: UUID?
     private var hasReceivedInitialRoomState = false
     private var lastShowdownTimeoutID: String?
+    private var lastReconciledEndedStateVersion: Int?
     /// Consecutive watchdog ticks with nobody on the clock.
     private var stalledPollTicks = 0
 
@@ -477,16 +478,6 @@ final class GameStore: ObservableObject {
         state.endStats = buildStats(reason: reason)
         GameLog.phaseChanged(from: previousPhase, to: .ended, state: state)
         GameLog.gameEnded(state: state)
-
-        let humanCount = state.players.filter { !$0.isBot }.count
-        WinStatsService.shared.recordGameWinIfEligible(
-            gameID: state.gameID,
-            gameMode: state.gameMode,
-            endStats: state.endStats,
-            endReason: reason,
-            humanCount: humanCount,
-            completedHands: state.completedHandCount
-        )
 
     }
 
@@ -1198,6 +1189,8 @@ final class GameStore: ObservableObject {
     /// another player's cards.
     private func mergeRemoteState(_ remote: GameState, remoteHostID: String?) {
         var remote = remote
+        let endedStateNeedsReconciliation = remote.phase == .ended
+            && lastReconciledEndedStateVersion != remote.version
         // A command response can land while an older room-state request is
         // still in flight. Never let that older snapshot resurrect a previous
         // turn or its call amount.
@@ -1210,6 +1203,13 @@ final class GameStore: ObservableObject {
         }
         if remote.hostID == nil {
             remote.hostID = remoteHostID
+        }
+
+        // The server credits the winner atomically with the ended-state commit.
+        // Refresh the device-local count when that authoritative result arrives.
+        if endedStateNeedsReconciliation && remote.gameMode == .classicPoker {
+            lastReconciledEndedStateVersion = remote.version
+            Task { await WinStatsService.shared.reconcileWithRemote() }
         }
         if let hostID = remote.hostID {
             isHost = hostID == ProfileService.deviceID

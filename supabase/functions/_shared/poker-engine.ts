@@ -41,7 +41,7 @@ const inHand=(p:P)=>!on(p.isEliminated)&&!on(p.isFolded);
 const live=(p:P)=>eligible(p)&&!on(p.isFolded);
 
 const value=(c:Card)=>ranks.indexOf(c.rank)+2;
-const handNames=["High Card","Pair","2 Pairs","3 of a Kind","Straight","Flush","Full House","4 of a Kind","Straight Flush","Royal Flush"];
+const handNames=["High Card","Pair","2 Pair","3 of a Kind","Straight","Flush","Full House","4 of a Kind","Straight Flush","Royal Flush"];
 
 /** Server entropy only; no request may provide cards, deck order, or a seed. */
 export function cryptoDeck():Card[]{

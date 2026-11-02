@@ -49,6 +49,15 @@ export default { fetch: withSupabase({ auth: ["publishable", "secret"] }, async 
     if (old[1] <= now) { old[0] = 0; old[1] = now + windowMs; } if (++old[0] > perMinute) throw new ApiError("rate_limited", 429); hits.set(key, old);
     if (body.operation === "create-room") {
       if (!body.roomID || !body.playerID || !UUID.test(body.roomID)) throw new ApiError("invalid_room_or_player");
+      // `game_rooms.host_id` references `profiles.id`. Older installs or a
+      // changed identifierForVendor can reach room creation without a profile
+      // row, which otherwise surfaces as the opaque room_create_23503 error.
+      const { error: profileError } = await ctx.supabaseAdmin.from("profiles").upsert({
+        id: body.playerID,
+        display_name: body.playerName?.trim() || "Player",
+        avatar_index: Math.max(0, Math.floor(body.avatarIndex ?? 0))
+      }, { onConflict: "id" });
+      if (profileError) throw new ApiError("profile_prepare_failed", 500);
       const state = initial(body.roomID, body.playerID, body.playerName?.trim() || "Player", Math.max(0, Math.floor(body.avatarIndex ?? 0)));
       const { error: e } = await ctx.supabaseAdmin.from("game_rooms").insert({ id: body.roomID, host_id: body.playerID, game_mode: "classicPoker", phase: "waiting", public_state: state, private_state: { remainingDeck: [], holeCardsByPlayer: {} }, server_version: 0 });
       if (e?.code === "23505") {

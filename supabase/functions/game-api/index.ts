@@ -1,7 +1,7 @@
 import "jsr:@supabase/functions-js@^2/edge-runtime.d.ts";
 import { withSupabase } from "npm:@supabase/server@^1";
 import { applyCommand, applyExpiredDeadline } from "../_shared/poker-engine.ts";
-import { error, parseRequest, UUID, viewerState, type JsonObject, type RequestBody } from "../_shared/contracts.ts";
+import { error, parseRequest, UUID, viewerState, type JsonObject } from "../_shared/contracts.ts";
 
 const limit = 16 * 1024, windowMs = 60_000, perMinute = 30, hits = new Map<string, [number, number]>();
 const salt = Deno.env.get("GAME_API_IP_HASH_SALT") ?? "local-development-only";
@@ -26,24 +26,16 @@ const canRebase = (room: any, command?: { kind?: string }) => {
 };
 const member = (room: any, id: string) => Array.isArray(room.public_state?.players) && room.public_state.players.some((p: any) => p.id === id);
 async function ip(req: Request) { const raw = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "missing"; const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${salt}:${raw}`)); return Array.from(new Uint8Array(d), b => b.toString(16).padStart(2, "0")).join(""); }
-async function audit(admin: any, roomID: string | undefined, body: Partial<RequestBody>, req: Request, reason: string, status: number) {
-  if (!roomID || !UUID.test(roomID)) return;
-  const { data: room } = await admin.from("game_rooms").select("recent_security_events,security_summary").eq("id", roomID).maybeSingle(); if (!room) return;
-  const high = status === 403 || status === 429; const at = new Date().toISOString();
-  const event = { request_id: crypto.randomUUID(), action_id: body.actionID ?? null, at, operation: body.operation ?? "invalid", room_id: roomID, claimed_player_id: body.playerID ?? null, reason, status, severity: high ? "high" : "normal", command: body.command ? { kind: body.command.kind } : null, user_agent: req.headers.get("user-agent")?.slice(0, 256) ?? "", ip_hash: await ip(req) };
-  const old = room.security_summary ?? {}; await admin.from("game_rooms").update({ recent_security_events: [...(room.recent_security_events ?? []), event].slice(-100), security_summary: { total: Number(old.total ?? 0) + 1, high: Number(old.high ?? 0) + (high ? 1 : 0), last_seen_at: at } }).eq("id", roomID);
-}
 function initial(id: string, player: string, name: string, avatar: number): JsonObject { return { gameID: id, hostID: player, gameMode: "classicPoker", phase: { waiting: {} }, stateVersion: 0, startingStack: 500, smallBlind: 5, players: [{ id: player, name, stack: 500, isReady: false, isDealer: false, isEliminated: false, isSittingOut: false, currentBet: 0, avatarIndex: avatar, isBot: false }], board: [null, null, null, null, null], pot: 0, bettingRound: { preFlop: {} }, activePlayerID: null, heroHoleCards: [], endStats: [], holeCardsByPlayer: {}, remainingDeck: [], handStats: {}, streetBetLevel: 0, lastRaiseSize: 10, actedThisStreet: [], callAmount: 0, raiseAmount: 0, completedHandCount: 0, manualFinishTieAttempts: 0 }; }
 
 // `ctx` is supplied by @supabase/server; keeping it structural avoids coupling
 // this Function to a private package-exported context type.
 export default { fetch: withSupabase({ auth: ["publishable", "secret"] }, async (req: Request, ctx: any) => {
-  let partial: Partial<RequestBody> = {};
   try {
     if (req.method !== "POST") throw new ApiError("method_not_allowed", 405);
     if (Number(req.headers.get("content-length") ?? 0) > limit) throw new ApiError("payload_too_large", 413);
     const text = await req.text(); if (new TextEncoder().encode(text).byteLength > limit) throw new ApiError("payload_too_large", 413);
-    const raw = JSON.parse(text); partial = raw && typeof raw === "object" ? raw as Partial<RequestBody> : {};
+    const raw = JSON.parse(text);
     const body = parseRequest(raw); if (!body) throw new ApiError("malformed_body");
     const key = `${await ip(req)}:${body.roomID ?? "new"}:${body.playerID ?? ""}`, now = Date.now(), old = hits.get(key) ?? [0, now + windowMs];
     if (old[1] <= now) { old[0] = 0; old[1] = now + windowMs; } if (++old[0] > perMinute) throw new ApiError("rate_limited", 429); hits.set(key, old);
@@ -102,8 +94,7 @@ export default { fetch: withSupabase({ auth: ["publishable", "secret"] }, async 
           p_public_state: state,
           p_private_state: room.private_state ?? { remainingDeck: [], holeCardsByPlayer: {} },
           p_deadline_at: room.deadline_at,
-          p_response: receipt,
-          p_security_update: null
+          p_response: receipt
         });
         if (e) throw new ApiError("join_commit_failed", 500);
         if (data?.ok) return json(data);
@@ -136,7 +127,7 @@ export default { fetch: withSupabase({ auth: ["publishable", "secret"] }, async 
       if (expired) {
         expired.publicState.stateVersion = Number(room.server_version) + 1;
         const automaticReceipt = { state: viewerState(expired.publicState, expired.privateState, body.playerID), deadlineAt: expired.deadlineAt };
-        const { data: automatic, error: automaticError } = await ctx.supabaseAdmin.rpc("commit_game_transition", { p_room_id: body.roomID, p_actor_device_id: body.playerID, p_action_id: crypto.randomUUID(), p_expected_version: room.server_version, p_public_state: expired.publicState, p_private_state: expired.privateState, p_deadline_at: expired.deadlineAt, p_response: automaticReceipt, p_security_update: null });
+        const { data: automatic, error: automaticError } = await ctx.supabaseAdmin.rpc("commit_game_transition", { p_room_id: body.roomID, p_actor_device_id: body.playerID, p_action_id: crypto.randomUUID(), p_expected_version: room.server_version, p_public_state: expired.publicState, p_private_state: expired.privateState, p_deadline_at: expired.deadlineAt, p_response: automaticReceipt });
         if (rebase && !automaticError && !automatic?.ok && automatic?.error?.code === "stale_state" && attempt < maxRebaseAttempts) { room = await loadRoom(); continue; }
         if (automaticError || !automatic?.ok) throw new ApiError("deadline_commit_failed", 500);
         if (body.operation === "room-state") return json(automatic);
@@ -167,7 +158,7 @@ export default { fetch: withSupabase({ auth: ["publishable", "secret"] }, async 
       t.publicState.stateVersion = Number(room.server_version) + 1; const receipt = { state: viewerState(t.publicState, t.privateState, body.playerID), deadlineAt: t.deadlineAt };
       // For strict commands the check above guarantees this equals expectedVersion;
       // rebased commands commit against the version they were just applied to.
-      const { data, error: e } = await ctx.supabaseAdmin.rpc("commit_game_transition", { p_room_id: body.roomID, p_actor_device_id: body.playerID, p_action_id: body.actionID, p_expected_version: room.server_version, p_public_state: t.publicState, p_private_state: t.privateState, p_deadline_at: t.deadlineAt, p_response: receipt, p_security_update: null });
+      const { data, error: e } = await ctx.supabaseAdmin.rpc("commit_game_transition", { p_room_id: body.roomID, p_actor_device_id: body.playerID, p_action_id: body.actionID, p_expected_version: room.server_version, p_public_state: t.publicState, p_private_state: t.privateState, p_deadline_at: t.deadlineAt, p_response: receipt });
       if (e) throw new ApiError("commit_failed", 500);
       if (data?.ok) return json(data);
       const code = data?.error?.code;
@@ -178,5 +169,5 @@ export default { fetch: withSupabase({ auth: ["publishable", "secret"] }, async 
       if (code === "stale_state" && rebase && attempt < maxRebaseAttempts) { room = await loadRoom(); continue; }
       throw new ApiError(code ?? "commit_rejected", code === "stale_state" ? 409 : 400);
     }
-  } catch (e) { const x = e instanceof ApiError ? e : new ApiError(e instanceof SyntaxError ? "malformed_body" : "internal_error", 400); await audit(ctx.supabaseAdmin, partial.roomID, partial, req, x.code, x.status); return json(error(x.code, x.status).body, x.status); }
+  } catch (e) { const x = e instanceof ApiError ? e : new ApiError(e instanceof SyntaxError ? "malformed_body" : "internal_error", 400); return json(error(x.code, x.status).body, x.status); }
 }) };

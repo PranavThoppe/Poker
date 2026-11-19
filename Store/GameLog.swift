@@ -1,7 +1,6 @@
 import Foundation
 
 /// Multiplayer debug logging. Filter the Xcode console with `[Game]`.
-/// Classic Poker events are also appended to `game_rooms.debug_log` via Supabase RPC.
 enum GameLog {
     private static var sequence = 0
     private static var handNumber = 0

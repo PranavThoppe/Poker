@@ -1,7 +1,7 @@
 #if DEBUG
 import Foundation
 
-/// DEBUG pot-math checks. Wired into `PokerEngineVerification.runAll()`.
+/// DEBUG pot-math checks, also exposed by the Showdown Reveal preview.
 /// A dedicated XCTest target is not added: the Messages extension is a
 /// synchronized folder with no importable module, so these run in-process.
 enum PokerEnginePotVerification {
